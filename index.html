@@ -497,7 +497,14 @@ a,.link{text-decoration-color:var(--yel)}
   </div>
 </div>
 <style>.capbox{margin-top:14px}.capbox button.pill{border:0;font:inherit;font-size:12px;white-space:nowrap}.capbox td.num,.capbox th.num{text-align:center}</style>
-<style>.lvsug{margin:6px 0 0;padding-left:20px;font-size:13.5px;line-height:1.55}.lvsug li{margin:3px 0}.note.bad{background:var(--badBg,#fde4e4);color:var(--bad,#9b1c1c);padding:10px 12px;border-radius:10px;font-size:13.5px;line-height:1.5}</style>
+<style>.lvsug{margin:6px 0 0;padding-left:20px;font-size:13.5px;line-height:1.55}.lvsug li{margin:3px 0}.note.bad{background:var(--badBg,#fde4e4);color:var(--bad,#9b1c1c);padding:10px 12px;border-radius:10px;font-size:13.5px;line-height:1.5}.vers { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); margin: 0 0 12px; }
+.vers > summary { cursor: pointer; padding: 10px 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.vers .vchips, .vers > .scroll { padding: 0 14px 12px; }
+.vchips { display: flex; gap: 8px; flex-wrap: wrap; }
+.vchip { font: inherit; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--text); cursor: pointer; }
+.vchip:hover { border-color: var(--brand); }
+.vchip.on { background: var(--brand); color: #fff; border-color: var(--brand); }
+</style>
 
 <script>
 /* Support Roster Maker engine. Pure functions, no DOM. */
@@ -547,11 +554,24 @@ var RM = (function () {
 
   /* ---------- service and team size ---------- */
   var SERVICES = ['8x5', '8x6', '8x7', '16x5', '16x6', '16x7', '24x7'];
-  function parseService(s) {
+  function parseService(s, pair) {
     var m = /^(8|16|24)x([567])$/.exec(s || '');
     if (!m) return null;
-    return { H: +m[1], dpw: +m[2], label: s };
+    var H = +m[1];
+    return { H: H, dpw: +m[2], label: s, pair: H === 16 ? (PAIR16.indexOf(pair) >= 0 ? pair : 'ME') : H === 8 ? (PAIR8.indexOf(pair) >= 0 ? pair : 'M') : null };
   }
+  /* a 16 hour service has two shifts. The engine keeps them as slot M (first) and slot E (second);
+     the pair says which real shifts they are: ME = Morning+Evening, EN = Evening+Night, NM = Night+Morning */
+  var PAIRS = { ME: { M: 'M', E: 'E' }, EN: { M: 'E', E: 'N' }, NM: { M: 'N', E: 'M' }, M: { M: 'M' }, E: { M: 'E' }, N: { M: 'N' } };
+  var PAIR16 = ['ME', 'EN', 'NM'], PAIR8 = ['M', 'E', 'N'];
+  var PAIR_LABEL = { ME: 'Morning + Evening', EN: 'Evening + Night', NM: 'Night + Morning', M: 'Morning', E: 'Evening', N: 'Night' };
+  var CUR_H = 0, CUR_PAIR = 'ME', NIGHT_SLOT = null;
+  function setPair(svc) {
+    CUR_H = svc ? svc.H : 0; CUR_PAIR = svc && (svc.H === 16 || svc.H === 8) && PAIRS[svc.pair] ? svc.pair : (CUR_H === 8 ? 'M' : 'ME');
+    NIGHT_SLOT = CUR_H === 16 ? (CUR_PAIR === 'EN' ? 'E' : CUR_PAIR === 'NM' ? 'M' : null) : CUR_H === 8 ? (CUR_PAIR === 'N' ? 'M' : null) : null;
+  }
+  function outCode(c) { if ((CUR_H === 16 || CUR_H === 8) && PAIRS[CUR_PAIR][c]) return PAIRS[CUR_PAIR][c]; return c; }
+  function inCode(l) { if (CUR_H === 16 || CUR_H === 8) { var m = PAIRS[CUR_PAIR]; for (var k in m) if (m[k] === l) return k; } return l; }
   function isOpenDow(svc, dow) {
     if (svc.dpw === 7) return true;
     if (svc.dpw === 6) return dow !== 0;
@@ -589,7 +609,7 @@ var RM = (function () {
   var SHIFT_INFO = {
     M: 'Morning', E: 'Evening', EW: 'Evening (female window)', N: 'Night', NB: 'Night backup', NBW: 'Night backup (early start)', NW: 'Night (early start)', MW: 'Morning (short)', MA: 'Morning (early, after a female evening)', G: 'General / TL'
   };
-  function defaultFirstStart(svc) { return svc.H === 8 ? 9 * 60 : 7 * 60; }
+  function defaultFirstStart(svc) { if (svc.H === 8) return svc.pair === 'E' ? 15 * 60 : svc.pair === 'N' ? 22 * 60 : 9 * 60; if (svc.H === 16) return svc.pair === 'EN' ? 14 * 60 + 30 : svc.pair === 'NM' ? 22 * 60 : 7 * 60; return 7 * 60; }
   function buildShifts(svc, S, edits) {
     var sh = {};
     sh.M = { code: 'M', start: S, len: 480 };
@@ -613,14 +633,14 @@ var RM = (function () {
   function monitorCodes(svc) { return svc.H === 8 ? ['M'] : svc.H === 16 ? ['M', 'E'] : ['M', 'E', 'N']; }
 
   var DEFAULT_RULES = {
-    minRestH: 10, maxNights: 5, maxWork: 6, maxOffRun: 2, maxDutyH: 10, overlapMin: 30,
+    minRestH: 10, maxNights: 5, maxWork: 5, maxOffRun: 2, maxDutyH: 10, overlapMin: 30,
     nbMode: 'always', shiftEdits: null
   };
 
   /* ---------- input validation (all errors together) ---------- */
   function validateInputs(inp) {
     var errs = [];
-    var svc = parseService(inp.service && inp.service.svc);
+    var svc = parseService(inp.service && inp.service.svc, inp.service && inp.service.pair); setPair(svc);
     if (!svc) errs.push({ step: 'service', field: 'Service hours', msg: 'Service hours "' + (inp.service && inp.service.svc || '') + '" is not supported. Allowed: ' + SERVICES.join(', ') + '.' });
     var n = inp.service && inp.service.n;
     if (!(Number.isInteger(n) && n >= 1)) errs.push({ step: 'service', field: 'Resources per shift (n)', msg: 'n = ' + n + ' is not valid. Use a whole number of 1 or more.' });
@@ -670,7 +690,7 @@ var RM = (function () {
     var fs = parseHM(inp.prev && inp.prev.firstStart);
     if (fs === null) errs.push({ step: 'prev', field: 'First service start time', msg: 'First service start "' + (inp.prev && inp.prev.firstStart || '') + '" is not a time. Use HH:MM, for example 07:00.' });
     var r = inp.rules || {};
-    [['minRestH', 'Minimum rest (hours)', 10, 16], ['maxNights', 'Max consecutive nights', 1, 5], ['maxWork', 'Max consecutive working days', 1, 14], ['maxOffRun', 'Max consecutive week-offs', 1, 7], ['maxDutyH', 'Max duty length (hours)', 1, 16], ['overlapMin', 'Handover overlap (minutes)', 0, 240]]
+    [['minRestH', 'Minimum rest (hours)', 10, 16], ['maxNights', 'Max consecutive nights', 2, 8], ['maxWork', 'Max consecutive working days', 5, 10], ['maxOffRun', 'Max consecutive week-offs', 1, 4], ['maxDutyH', 'Max duty length (hours)', 1, 12], ['overlapMin', 'Handover overlap (minutes)', 20, 240]]
       .forEach(function (x) {
         if (!(typeof r[x[0]] === 'number' && r[x[0]] >= x[2] && r[x[0]] <= x[3])) errs.push({ step: 'rules', field: x[1], msg: x[1] + ' = ' + r[x[0]] + ' is not valid. Allowed: ' + x[2] + ' to ' + x[3] + '.' });
       });
@@ -725,7 +745,7 @@ var RM = (function () {
     return need;
   }
   function buildContext(inp) {
-    var svc = parseService(inp.service.svc), n = inp.service.n, nBy = nByOf(inp.service);
+    var svc = parseService(inp.service.svc, inp.service.pair), n = inp.service.n, nBy = nByOf(inp.service); setPair(svc);
     var start = dateFromISO(inp.period.start), end = dateFromISO(inp.period.end);
     var D = daysBetween(start, end) + 1;
     var hol = {};
@@ -761,7 +781,7 @@ var RM = (function () {
       var nwStart = we - ov, nwLen = Math.min(shifts.N.len, maxD);
       var nbwStart = we, nbwLen = Math.min(shifts.NB.len, maxD);
       var mEnd = shifts.M.start + shifts.M.len, maStart = nwStart + nwLen - ov - 1440, maLen = mEnd - maStart;
-      if (ewStart >= ws && ewLen <= maxD && nwLen > 0 && maStart < shifts.M.start && maLen <= maxD) {
+      if (ewStart >= ws && ewLen <= maxD && nwLen > 0 && maStart <= shifts.M.start && maLen <= maxD) {
         shifts.EW = { code: 'EW', start: ewStart, len: ewLen }; womanCan.EW = true;
         shifts.NW = { code: 'NW', start: nwStart, len: nwLen }; womanCan.NW = true;
         shifts.NBW = { code: 'NBW', start: nbwStart, len: nbwLen }; womanCan.NBW = false;
@@ -805,6 +825,10 @@ var RM = (function () {
         if (!forceOff[pi][t]) { forceOff[pi][t] = true; forceCnt[pi]++; }
       }
     });
+    // a planned week-off the user asked for is honoured: if it is a longer run than the rule allows (up to 4), the rule is raised for this roster
+    var offRunAuto = 0;
+    forceOff.forEach(function (fo) { if (!fo) return; var run = 0; for (var t = 0; t < D; t++) { if (fo[t]) { run++; if (run > rules.maxOffRun && run <= 4 && run > offRunAuto) offRunAuto = run; } else run = 0; } });
+    if (offRunAuto) rules = Object.assign({}, rules, { maxOffRun: offRunAuto });
     var forceAhead = people.map(function (pp, i) { var a = new Array(D + 1).fill(0); for (var t = D - 1; t >= 0; t--) a[t] = a[t + 1] + ((t + 1 < D && forceOff[i] && forceOff[i][t + 1]) ? 1 : 0); return a; });
     // no automatic week-off in the 3 days before and the 3 days after a planned leave (unless the person asked for that week-off)
     var bufNoOff = people.map(function () { return new Array(D).fill(false); }), BUFD = 3;
@@ -853,7 +877,7 @@ var RM = (function () {
     var dayH = (function () { var L = ['M', 'E', 'N', 'NB'].filter(function (c) { return !!shifts[c]; }).map(function (c) { return shifts[c].len; }); if (!L.length) return shifts.M.len / 60; var m = 0; L.forEach(function (x) { m += x; }); return Math.round(m / L.length / 60 * 100) / 100; })();
     var ctx = {
       leave: leave, leaveN: leaveN, leaveCnt: leaveCnt, leaveWork: leaveWork, availFrom: availFrom,
-      bufNoOff: bufNoOff, forceOff: forceOff, forceCnt: forceCnt, forceAhead: forceAhead, planCountOn: (function () { var a = new Array(D + 1).fill(0); forceOff.forEach(function (f) { if (f) for (var t = 0; t < D; t++) if (f[t]) a[t]++; }); return a; })(), planErr: planErr, fixedOf: fixedOf, fixedDay: fixedDay, fixedCodesDay: fixedCodesDay, fixedCodes: fixedCodes, fixErr: fixErr,
+      bufNoOff: bufNoOff, forceOff: forceOff, forceCnt: forceCnt, forceAhead: forceAhead, planCountOn: (function () { var a = new Array(D + 1).fill(0); forceOff.forEach(function (f) { if (f) for (var t = 0; t < D; t++) if (f[t]) a[t]++; }); return a; })(), planErr: planErr, offRunAuto: offRunAuto, fixedOf: fixedOf, fixedDay: fixedDay, fixedCodesDay: fixedCodesDay, fixedCodes: fixedCodes, fixErr: fixErr,
       inp: inp, svc: svc, n: n, nBy: nBy, start: start, D: D, days: days, rules: rules, S: S, shifts: shifts, people: people, P: people.length,
       nM: men, nW: women, closed: closed, W: W, extraOffs: W - closed, holOpen: holOpen, workingDays: D - W - holOpen,
       dayH: dayH, targetHours: dayH * (D - W - holOpen), womanCan: womanCan, ws: ws, we: we, prev: prev, team: teamSize(svc, nBy), monitors: monitorCodes(svc)
@@ -889,10 +913,24 @@ var RM = (function () {
     ctx.monitors = ctx.monitors.concat(['EW', 'NW', 'MW', 'MA'].filter(function (c) { return !!shifts[c]; }));
     if (shifts.NW) { ctx.ewOverlap = shifts.EW.start + shifts.EW.len - shifts.NW.start; ctx.nwOverlap = shifts.NW.start + shifts.NW.len - (shifts.MA.start + 1440); }
     ctx.seedBase = hashStr(JSON.stringify([inp.leaves || [], inp.service, inp.period, inp.team, inp.weekoffs, inp.women, inp.holidays.list, inp.holidays.mode, inp.rules, inp.prev.firstStart, inp.prev.states]));
+    // week-offs owed from last month: give them back from the spare days, keeping one day of slack
+    ctx.owedGranted = people.map(function () { return 0; });
+    var owedIn = prev.map(function (s) { return Math.max(0, (s && s.owed) | 0); });
+    if (owedIn.some(function (x) { return x > 0; })) {
+      try {
+        var spare = capSuffix(ctx, true)[0] - ctx.offsOf.reduce(function (a, b) { return a + b; }, 0) - 1, guard = 0;
+        while (spare > 0 && guard++ < 200) {
+          var bi = -1, bv = 0;
+          owedIn.forEach(function (x, i) { var left = x - ctx.owedGranted[i]; if (left > bv && ctx.offsOf[i] < ctx.extraOffs + 3 && !(ctx.leave[i] && leaveCnt[i])) { bv = left; bi = i; } });
+          if (bi < 0) break;
+          ctx.offsOf[bi]++; ctx.owedGranted[bi]++; spare--;
+        }
+      } catch (er) { /* keep the normal week-offs */ }
+    }
     ctx.demand = demandInfo(ctx);
     return ctx;
   }
-  function isNight(c) { return c === 'N' || c === 'NB' || c === 'NBW' || c === 'NW'; }
+  function isNight(c) { return c === 'N' || c === 'NB' || c === 'NBW' || c === 'NW' || (NIGHT_SLOT !== null && c === NIGHT_SLOT); }
 
   function nightOptions(ctx) {
     var sh = ctx.shifts;
@@ -1375,10 +1413,14 @@ var RM = (function () {
       }
       if (nb > 0) { o.blocks.push(nb); o.nightBlocks++; }
       o.Mf = o.M + o.MW + o.MA; o.Ef = o.E + o.EW; o.Nf = o.N + o.NW; o.NBf = o.NB + o.NBW;
-      o.nights = o.Nf + o.NBf;
+      o.nights = o.Nf + o.NBf + (NIGHT_SLOT !== null ? (o[NIGHT_SLOT] || 0) : 0);
       o.target = ctx.dayH * (ctx.workingDays + ctx.extraOffs - ctx.offsOf[p] - ctx.leaveWork[p]);
       o.balance = Math.round((o.hours - o.target) * 10) / 10;
       o.carryBalance = Math.round((o.balance + (ctx.prev[p].balance || 0)) * 10) / 10;
+      var offsN = 0, lvN = 0; for (var td = 0; td < ctx.D; td++) { var tc = cand.grid[p][td]; if (tc === 'OFF') offsN++; else if (tc === 'LV') lvN++; }
+      var gr = (ctx.owedGranted && ctx.owedGranted[p]) || 0;
+      o.owed = Math.max(0, ctx.extraOffs + gr - offsN - lvN);
+      o.carryOwed = o.owed + Math.max(0, ((ctx.prev[p] && ctx.prev[p].owed) | 0) - gr);
       o.special = o.wk + o.hol;
       return o;
     });
@@ -1603,15 +1645,15 @@ var RM = (function () {
 
   /* ---------- exports ---------- */
   function csvCell(v) { v = String(v === undefined || v === null ? '' : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
-  function toCSV(ctx, cand) {
-    var an = cand.an || analyze(ctx, cand), rows = [['Person', 'Tag', 'Date', 'Day', 'Shift', 'Start', 'End', 'Hours', 'Mode', 'Overlap_min', 'Holiday', 'HoursBalance']];
+  function toCSV(ctx, cand, version) {
+    var an = cand.an || analyze(ctx, cand), rows = [['Person', 'Tag', 'Date', 'Day', 'Shift', 'Start', 'End', 'Hours', 'Mode', 'Overlap_min', 'Holiday', 'HoursBalance', 'Version', 'Code', 'OffsOwed']];
     ctx.people.forEach(function (pp, p) {
       for (var d = 0; d < ctx.D; d++) {
         var c = cand.grid[p][d], day = ctx.days[d];
-        if (c === 'OFF' || c === 'CL' || c === 'LV') rows.push([pp.name, pp.tag, day.iso, DOW[day.dow], c === 'CL' ? 'CL' : c === 'LV' ? 'LV' : 'OFF', '', '', 0, '', '', day.hol ? day.hol.name : '', an.per[p].carryBalance]);
+        if (c === 'OFF' || c === 'CL' || c === 'LV') rows.push([pp.name, pp.tag, day.iso, DOW[day.dow], c === 'CL' ? 'CL' : c === 'LV' ? 'LV' : 'OFF', '', '', 0, '', '', day.hol ? day.hol.name : '', an.per[p].carryBalance, version || '1', c, an.per[p].carryOwed || 0]);
         else {
           var x = ctx.shifts[c];
-          rows.push([pp.name, pp.tag, day.iso, DOW[day.dow], baseCode(c), fmtHM(x.start), fmtHM(x.start + x.len), x.len / 60, isHome(ctx, pp, c) ? 'home' : 'office', overlapFor(ctx, c), day.hol ? day.hol.name : '', an.per[p].carryBalance]);
+          rows.push([pp.name, pp.tag, day.iso, DOW[day.dow], outCode(baseCode(c)), fmtHM(x.start), fmtHM(x.start + x.len), x.len / 60, isHome(ctx, pp, c) ? 'home' : 'office', overlapFor(ctx, c), day.hol ? day.hol.name : '', an.per[p].carryBalance, version || '1', c, an.per[p].carryOwed || 0]);
         }
       }
     });
@@ -1627,7 +1669,8 @@ var RM = (function () {
     var o = sh[c].start + sh[c].len - (sh[nx].start + plus);
     return o > 0 ? o : '';
   }
-  function toJSON(ctx, cand, seedLabel) {
+  function toJSON(ctx, cand, seedLabel, meta) {
+    meta = meta || {};
     var an = cand.an || analyze(ctx, cand);
     var last = ctx.D - 1;
     var people = ctx.people.map(function (pp, p) {
@@ -1636,17 +1679,17 @@ var RM = (function () {
         var c = cand.grid[p][d];
         if (c === 'LV') { wr = 0; nr = 0; orr = 0; lc = 'OFF'; }
         else if (c === 'OFF' || c === 'CL') { wr = 0; nr = 0; orr++; lc = 'OFF'; }
-        else { wr++; orr = 0; nr = isNight(c) ? nr + 1 : 0; lc = baseCode(c); le = d * 1440 + ctx.shifts[c].start + ctx.shifts[c].len; }
+        else { wr++; orr = 0; nr = isNight(c) ? nr + 1 : 0; lc = outCode(baseCode(c)); le = d * 1440 + ctx.shifts[c].start + ctx.shifts[c].len; }
       }
       var leDate = null;
       if (le !== null) { var dd = Math.floor(le / 1440); leDate = iso(addDays(ctx.start, dd)) + 'T' + fmtHM(le); }
-      return { name: pp.name, tag: pp.tag, carry: { workRun: wr, nightRun: nr, offRun: orr, lastCode: lc, lastDutyEnd: leDate, hoursBalance: an.per[p].carryBalance } };
+      return { name: pp.name, tag: pp.tag, carry: { workRun: wr, nightRun: nr, offRun: orr, lastCode: lc, lastDutyEnd: leDate, hoursBalance: an.per[p].carryBalance, offsOwed: an.per[p].carryOwed || 0 } };
     });
     return JSON.stringify({
-      version: 1, generator: 'support-roster-maker', seed: seedLabel, service: ctx.svc.label, n: ctx.n, nBy: ctx.nBy,
+      version: 1, generator: 'support-roster-maker', seed: seedLabel, par: cand.par || undefined, tls: cand.tls || undefined, rosterVersion: meta.version || '1', history: meta.history || [], inputs: ctx.inp, service: ctx.svc.label, pair: ctx.svc.pair || undefined, n: ctx.n, nBy: ctx.nBy,
       period: { start: ctx.days[0].iso, end: ctx.days[last].iso }, weekOffsPerPerson: ctx.W,
       people: people,
-      rows: ctx.people.map(function (pp, p) { return { name: pp.name, days: cand.grid[p].map(function (c) { return baseCode(c); }) }; })
+      rows: ctx.people.map(function (pp, p) { return { name: pp.name, days: cand.grid[p].map(function (c) { return outCode(baseCode(c)); }), raw: cand.grid[p].slice() }; })
     }, null, 1);
   }
 
@@ -1842,34 +1885,58 @@ var RM = (function () {
     }
     return out;
   }
-  function replanLeave(ctx, cand, name, fromISO, toISO, tries) {
+  /* shifts must be covered first: if no plan fits the rules, relax them one small step at a time (working days in a row first)
+     and say which limits were relaxed */
+  function replanLadder(r) {
+    var L = [null], mw = r.maxWork, nb = r.maxNights, rest = r.minRestH, w;
+    for (w = mw + 1; w <= Math.max(mw + 1, 14); w++) L.push({ maxWork: w, maxNights: nb, minRestH: rest });
+    var top = Math.max(mw + 1, 14);
+    [[top, Math.max(nb, 8), rest], [top, Math.max(nb, 10), Math.min(rest, 8)], [Math.max(top, 20), Math.max(nb, 16), Math.min(rest, 8)], [31, 31, Math.min(rest, 8)]].forEach(function (x) { L.push({ maxWork: x[0], maxNights: x[1], minRestH: x[2] }); });
+    return L;
+  }
+  function replanLeave(ctx, cand, name, fromISO, toISO, tries, opts) {
+    var first = null, ladder = replanLadder(ctx.rules);
+    for (var lv = 0; lv < ladder.length; lv++) {
+      var over = ladder[lv];
+      var r = replanOnce(ctx, cand, name, fromISO, toISO, lv ? Math.min(tries || 40, 20) : tries, opts, over);
+      if (!first) first = r;
+      if (r.plans.length) { r.relaxLevel = lv; r.relaxed = over && (over.maxWork > ctx.rules.maxWork || over.maxNights > ctx.rules.maxNights || over.minRestH < ctx.rules.minRestH) ? over : null; return r; }
+      if (r.noPerson) break;
+    }
+    return first;
+  }
+  function replanOnce(ctx, cand, name, fromISO, toISO, tries, opts, over) {
+    opts = opts || {};
     var inp = JSON.parse(JSON.stringify(ctx.inp));
+    if (over) inp.rules = Object.assign({}, inp.rules, over);
     inp.leaves = (inp.leaves || []).concat([{ name: name, from: fromISO, to: toISO || fromISO, why: 'Sudden leave' }]);
-    var ctx2 = buildContext(inp), fromD = Math.max(0, daysBetween(ctx.start, dateFromISO(fromISO)));
+    var ctx2 = buildContext(inp), fromD = Math.max(0, daysBetween(ctx.start, dateFromISO(opts.lockFrom && opts.lockFrom < fromISO ? opts.lockFrom : fromISO))), endD = opts.endISO ? daysBetween(ctx.start, dateFromISO(opts.endISO)) : null;
     ctx2.offsOf = ctx.offsOf.slice();
     var res = { ctx: ctx2, plans: [], fromD: fromD, check: leaveCheck(ctx2) };
     var pi = -1; ctx.people.forEach(function (pp, i) { if (pp.name === name) pi = i; });
-    if (pi < 0) return res;
+    if (pi < 0) { res.noPerson = true; return res; }
     var ldays = []; ctx2.days.forEach(function (day, d) { if (ctx2.leave[pi] && ctx2.leave[pi][d] && !(cand.grid[pi][d] === 'LV')) ldays.push(d); });
     var raw = localPlans(ctx2, cand, ldays.map(function (d) { return { p: pi, d: d }; }), ctx.seedBase);
     function finish(g) {
       var cxf = g.cx || ctx2;
       g.hard = validate(cxf, g.grid);
-      if (g.hard.some(function (h) { return !h.pass; })) return false;
+      if (g.hard.some(function (h) { return !h.pass; })) { if (typeof process !== 'undefined' && process.env && process.env.RMDBG) console.error('FAIL', over ? JSON.stringify(over) : 'base', g.kind || '', g.hard.filter(function (h) { return !h.pass; }).map(function (h) { return h.id + ':' + h.detail.slice(0, 90); }).join(' || ')); return false; }
       var ch = [], touched = {};
       ctx2.people.forEach(function (q, qi) {
         g.grid[qi].forEach(function (c, d) {
           var o = cand.grid[qi][d];
           if (c === o || c === 'LV' || o === 'LV') return;
+          if (endD !== null && d > endD) { touched.__out = 1; }
           ch.push({ q: qi, d: d, from: o, to: c }); touched[qi] = 1;
         });
       });
+      if (touched.__out) return false;
       g.changes = ch; g.people = Object.keys(touched).length; g.baseGrid = cand.grid;
       g.an = analyze(cxf, g); g.soft = softRules(cxf, g, g.an);
       return true;
     }
     raw = raw.filter(finish);
-    if (raw.length < 3) {
+    function fallback() {
       ctx2.lock = { upTo: fromD, grid: cand.grid };
       ctx2.capFrom = capSuffix(ctx2, true);
       var seen = {}; raw.forEach(function (g) { seen[signature(g)] = 1; });
@@ -1884,6 +1951,38 @@ var RM = (function () {
         if (finish(g)) raw.push(g);
       }
       ctx2.lock = null;
+    }
+    if (raw.length < 3) fallback();
+    if (!raw.length) {
+      // no spare people: the leave days must be worked by the others, so they give up week-offs (one at a time, the most rested first)
+      var keep = ctx2.offsOf.slice(), gave = {}, need = ctx2.offsOf.reduce(function (x, y) { return x + y; }, 0), cap = capSuffix(ctx2, true)[0], total = 0;
+      var pref = cand.grid.map(function (row) { var n = 0; for (var t = 0; t < fromD; t++) if (row[t] === 'OFF') n++; return n; });
+      var leavers = {}, leaverCut = {}, adj = false; ctx2.people.forEach(function (pp, q) { if (ctx2.leave[q] && ctx2.leave[q].some(Boolean)) leavers[q] = 1; });
+      // the person on leave: leave counts as rest, so their week-offs go down to the minimum first
+      ctx2.people.forEach(function (pp, q) {
+        if (!leavers[q] || need <= cap) return;
+        var lvd = ctx2.leave[q].filter(Boolean).length, fl0 = minOffsForRuns(ctx2, q, 0, (ctx2.prev[q] && ctx2.prev[q].workRun) || 0);
+        var nv = Math.max(fl0, pref[q], ctx2.forceCnt[q] || 0, ctx2.offsOf[q] - lvd);
+        if (nv < ctx2.offsOf[q]) { need -= ctx2.offsOf[q] - nv; leaverCut[pp.name] = ctx2.offsOf[q] - nv; ctx2.offsOf[q] = nv; adj = true; }
+      });
+      while (need > cap) {
+        var gp = -1, gbest = -1;
+        for (var q = 0; q < ctx2.P; q++) {
+          if (leavers[q]) continue;
+          var fl = minOffsForRuns(ctx2, q, 0, (ctx2.prev[q] && ctx2.prev[q].workRun) || 0);
+          if (ctx2.offsOf[q] <= Math.max(fl, pref[q]) || ctx2.offsOf[q] <= (ctx2.forceCnt[q] || 0)) continue;
+          if (ctx2.offsOf[q] > gbest) { gbest = ctx2.offsOf[q]; gp = q; }
+        }
+        if (gp < 0) break;
+        ctx2.offsOf[gp]--; gave[ctx2.people[gp].name] = (gave[ctx2.people[gp].name] || 0) + 1; need--; total++;
+      }
+      if (typeof process !== 'undefined' && process.env && process.env.RMDBG) console.error('give-up', need, cap, total, JSON.stringify(gave));
+      if (total || adj) {
+        fallback();
+        if (typeof process !== 'undefined' && process.env && process.env.RMDBG) console.error('after fallback', raw.length);
+        if (raw.length) { res.gave = total ? gave : null; res.gaveTotal = total; res.leaverCut = adj ? leaverCut : null; raw.forEach(function (g) { g.gave = res.gave; g.gaveTotal = total; g.leaverCut = res.leaverCut; }); }
+        else ctx2.offsOf = keep;
+      }
     }
     raw.sort(function (a, b) { return a.changes.length - b.changes.length || b.an.score - a.an.score; });
     res.plans = raw.slice(0, 3);
@@ -1972,6 +2071,154 @@ var RM = (function () {
     return list;
   }
 
+
+  function nextVersion(v) {
+    v = String(v || '1'); var p = v.split('.');
+    if (p.length === 1) return v + '.1';
+    var last = parseInt(p[p.length - 1], 10); if (isNaN(last)) return v + '.1';
+    p[p.length - 1] = String(last + 1); return p.join('.');
+  }
+  function makeCand(ctx, grid, par, tls) {
+    var cand = { grid: grid, kind: 'upload', par: par || randomParams(mulberry((ctx.seedBase || 1) >>> 0), ctx.P), tls: tls };
+    cand.hard = validate(ctx, grid);
+    cand.an = analyze(ctx, cand);
+    cand.soft = softRules(ctx, cand, cand.an);
+    return cand;
+  }
+  var LETTERS = ['M', 'E', 'N', 'NB', 'G', 'OFF', 'CL', 'LV'];
+  function rosterFromFile(text, fname, base, extra) {
+    var res = { errors: [], warnings: [], version: '1', history: [] };
+    var t = (text || '').trim();
+    if (!t) { res.errors.push(fname + ': file is empty.'); return res; }
+    var P = [], byName = {}, start = null, D = 0, snap = null, hols = {}, starts = {};
+    function person(nm, tag) { var k = nm.toLowerCase(); if (!byName[k]) { byName[k] = { name: nm, tag: tag || '', days: {}, raw: {} }; P.push(byName[k]); } else if (tag && !byName[k].tag) byName[k].tag = tag; return byName[k]; }
+    if (t[0] === '{') {
+      var j; try { j = JSON.parse(t); } catch (er) { res.errors.push(fname + ': the file is damaged (' + String(er.message).replace(/ in JSON.*/, '') + '). Export it again.'); return res; }
+      if (!Array.isArray(j.rows) || !j.period || !j.period.start) { res.errors.push(fname + ': this JSON has no roster rows. Use the JSON that was exported from a finished roster.'); return res; }
+      start = dateFromISO(j.period.start);
+      if (!start) { res.errors.push(fname + ': the period start is not a valid date.'); return res; }
+      (j.people || []).forEach(function (pp) { if (pp && pp.name) person(pp.name, pp.tag); });
+      j.rows.forEach(function (r) {
+        if (!r || !r.name || !Array.isArray(r.days)) return;
+        var o = person(r.name, ''); D = Math.max(D, r.days.length);
+        r.days.forEach(function (c, k) { o.days[iso(addDays(start, k))] = String(c).toUpperCase(); if (r.raw && r.raw[k]) o.raw[iso(addDays(start, k))] = String(r.raw[k]); });
+      });
+      snap = j.inputs || null; res.par = j.par; res.tls = j.tls; res.version = String(j.rosterVersion || '1'); res.history = Array.isArray(j.history) ? j.history : [];
+    } else {
+      var lines = t.replace(/\r/g, '').split('\n'), head = splitCSVLine(lines[0]).map(function (x) { return x.trim().toLowerCase(); });
+      var ip = head.findIndex(function (x) { return x === 'person' || x === 'name'; }), id = head.indexOf('date'), is = head.indexOf('shift'), itg = head.indexOf('tag'), ist = head.indexOf('start'), ih = head.indexOf('holiday'), iv = head.indexOf('version'), ic = head.indexOf('code');
+      if (ip < 0 || id < 0 || is < 0) { res.errors.push(fname + ': header must include Person, Date and Shift columns.'); return res; }
+      var minD = null;
+      for (var i = 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue;
+        var cells = splitCSVLine(lines[i]);
+        if (cells.length <= Math.max(ip, id, is)) { res.errors.push(fname + ' line ' + (i + 1) + ': row is incomplete.'); continue; }
+        var dt = parseDateLoose(cells[id]); if (!dt) { res.errors.push(fname + ' line ' + (i + 1) + ': "' + cells[id] + '" is not a valid date.'); continue; }
+        var o = person(cells[ip].trim(), itg >= 0 ? cells[itg].trim() : ''), key = iso(dt);
+        o.days[key] = cells[is].trim().toUpperCase();
+        if (ic >= 0 && cells[ic] && cells[ic].trim()) o.raw[key] = cells[ic].trim();
+        if (!minD || dt < minD) minD = dt;
+        if (D < 1) D = 1;
+        if (ih >= 0 && cells[ih] && cells[ih].trim()) hols[key] = cells[ih].trim();
+        if (ist >= 0 && cells[ist] && cells[ist].trim()) { var lt = (ic >= 0 && cells[ic] && cells[ic].trim()) ? cells[ic].trim() : o.days[key]; starts[lt] = starts[lt] || {}; starts[lt][cells[ist].trim()] = (starts[lt][cells[ist].trim()] || 0) + 1; }
+        if (iv >= 0 && cells[iv] && cells[iv].trim()) res.version = cells[iv].trim();
+      }
+      if (res.errors.length) return res;
+      start = minD;
+    }
+    if (extra && extra.par && !res.par) { res.par = extra.par; res.tls = extra.tls; }
+    if (extra && extra.inputs && !snap) { snap = extra.inputs; if (Array.isArray(extra.history)) res.history = extra.history; }
+    if (!P.length || !start) { res.errors.push(fname + ': no roster rows were found.'); return res; }
+    // dates: every person must have every day from the first to the last
+    var allKeys = {}; P.forEach(function (o) { Object.keys(o.days).forEach(function (k) { allKeys[k] = 1; }); });
+    var keys = Object.keys(allKeys).sort(); start = dateFromISO(keys[0]); D = daysBetween(start, dateFromISO(keys[keys.length - 1])) + 1;
+    var startISO = keys[0], endISO = keys[keys.length - 1];
+    for (var q = 0; q < P.length; q++) for (var d0 = 0; d0 < D; d0++) {
+      if (!P[q].days[iso(addDays(start, d0))]) { res.errors.push(fname + ': ' + P[q].name + ' has no shift for ' + iso(addDays(start, d0)) + '. Every person needs every day.'); return res; }
+    }
+    // the inputs: exact when the file carries them, otherwise worked out from the roster
+    var inp;
+    if (snap && snap.service && snap.team) inp = JSON.parse(JSON.stringify(snap));
+    else {
+      inp = JSON.parse(JSON.stringify(base || {}));
+      var duty = {}, dow = [0, 0, 0, 0, 0, 0, 0], hasNB = false;
+      P.forEach(function (o) { Object.keys(o.days).forEach(function (k) { var c = o.days[k]; if (c === 'NB') hasNB = true; if (c === 'M' || c === 'E' || c === 'N' || c === 'NB') { duty[c] = 1; dow[dateFromISO(k).getUTCDay()]++; } }); });
+      var set = ['M', 'E', 'N'].filter(function (c) { return duty[c]; }), H, pr = null;
+      if (hasNB || set.length >= 3) H = 24; else if (set.length === 2) { H = 16; pr = set.join('') === 'ME' ? 'ME' : set.join('') === 'EN' ? 'EN' : set.join('') === 'MN' ? 'NM' : 'ME'; } else { H = 8; pr = set[0] || 'M'; }
+      var closed = []; for (var w = 0; w < 7; w++) if (dow[w] === 0) closed.push(w);
+      var dpw = closed.length === 0 ? 7 : (closed.length === 1 && closed[0] === 0) ? 6 : (closed.length === 2 && closed[0] === 0 && closed[1] === 6) ? 5 : 7;
+      var svcs = H + 'x' + dpw, sv = parseService(svcs, pr); setPair(sv);
+      // people per shift: the most common daily count of each shift
+      var cnt = { M: {}, E: {}, N: {} };
+      for (var dd = 0; dd < D; dd++) {
+        var k2 = iso(addDays(start, dd)), cc = { M: 0, E: 0, N: 0 };
+        P.forEach(function (o) { var l = o.days[k2]; if (l === 'M' || l === 'E' || l === 'N') cc[inCode(l)]++; });
+        ['M', 'E', 'N'].forEach(function (l) { if (cc[l] > 0) cnt[l][cc[l]] = (cnt[l][cc[l]] || 0) + 1; });
+      }
+      var by = {}; ['M', 'E', 'N'].forEach(function (l) { var bestN = 1, bestC = 0; Object.keys(cnt[l]).forEach(function (n) { if (cnt[l][n] > bestC) { bestC = cnt[l][n]; bestN = +n; } }); by[l] = bestN; });
+      inp.service = { svc: svcs, pair: pr, n: by.M, by: by };
+      inp.period = { start: startISO, end: endISO };
+      var men = P.filter(function (o) { return !(/^w|^f/i.test(o.tag) || /^female/i.test(o.name)); }), wom = P.filter(function (o) { return /^w|^f/i.test(o.tag) || /^female/i.test(o.name); });
+      inp.team = { men: men.length, women: wom.length, headcount: '', menNames: men.map(function (o) { return o.name; }), womenNames: wom.map(function (o) { return o.name; }) };
+      inp.holidays = { list: Object.keys(hols).sort().map(function (k) { return { date: k, name: hols[k] }; }), mode: (base && base.holidays && base.holidays.mode) || 'normal' };
+      var mS = starts['M'] ? 'M' : outCode('M'), best = null, bc = 0; if (starts[mS]) Object.keys(starts[mS]).forEach(function (s) { if (starts[mS][s] > bc) { bc = starts[mS][s]; best = s; } });
+      inp.prev = { firstStart: best || fmtHM(defaultFirstStart(sv)), states: {} };
+      var offs = P.map(function (o) { var n = 0; Object.keys(o.days).forEach(function (k) { if (o.days[k] === 'OFF') n++; }); return n; }).sort(function (a, b) { return a - b; });
+      inp.weekoffs = { perPerson: offs.length ? offs[Math.floor(offs.length / 2)] : 6 };
+      inp.plannedOffs = []; inp.fixed = [];
+      inp.women = inp.team.women > 0 ? ((base && base.women && base.women.start) ? base.women : { start: '07:00', end: '21:00' }) : { start: '', end: '' };
+      inp.rules = Object.assign({}, DEFAULT_RULES, (base && base.rules) || {});
+      res.warnings.push('This file does not carry the original inputs, so the service (' + svcs + (pr ? ', ' + PAIR_LABEL[pr] : '') + '), shift times and team were worked out from the roster. Check them below.');
+    }
+    inp.today = startISO;
+    // leave taken in the roster
+    inp.leaves = (inp.leaves || []).slice();
+    P.forEach(function (o) {
+      var runStart = null;
+      for (var d1 = 0; d1 <= D; d1++) {
+        var isL = d1 < D && o.days[iso(addDays(start, d1))] === 'LV';
+        if (isL && runStart === null) runStart = d1;
+        if (!isL && runStart !== null) {
+          var a = iso(addDays(start, runStart)), b = iso(addDays(start, d1 - 1));
+          if (!inp.leaves.some(function (l) { return l.name.toLowerCase() === o.name.toLowerCase() && l.from <= a && l.to >= b; })) inp.leaves.push({ name: o.name, from: a, to: b, reason: 'Leave in the roster' });
+          runStart = null;
+        }
+      }
+    });
+    var ctx;
+    try { var svc2 = parseService(inp.service.svc, inp.service.pair); setPair(svc2); ctx = buildContext(inp); }
+    catch (er2) { res.errors.push(fname + ': the roster could not be rebuilt from this file (' + er2.message + ').'); return res; }
+    var grid = [], bad = [];
+    ctx.people.forEach(function (pp) {
+      var o = byName[pp.name.toLowerCase()];
+      if (!o) { bad.push('"' + pp.name + '" is in the inputs but not in the roster'); grid.push(null); return; }
+      grid.push(o);
+    });
+    P.forEach(function (o) { if (!ctx.people.some(function (pp) { return pp.name.toLowerCase() === o.name.toLowerCase(); })) bad.push('"' + o.name + '" is in the roster but not in the team'); });
+    if (bad.length) { res.errors.push(fname + ': names do not match: ' + bad.join('; ') + '.'); return res; }
+    if (ctx.D !== D || ctx.days[0].iso !== startISO) { res.errors.push(fname + ': the period in the inputs (' + ctx.days[0].iso + ' to ' + ctx.days[ctx.D - 1].iso + ') does not match the roster (' + startISO + ' to ' + endISO + ').'); return res; }
+    var finalGrid = grid.map(function (o) {
+      var row = [];
+      for (var d2 = 0; d2 < D; d2++) {
+        var k3 = iso(addDays(start, d2)), l3 = o.days[k3], rw = o.raw[k3], c3;
+        if (rw && (rw === 'LV' || rw === 'OFF' || rw === 'CL' || ctx.shifts[rw])) c3 = rw;
+        else if (l3 === 'L') c3 = 'LV';
+        else if (l3 === 'LEAVE') c3 = 'LV';
+        else if (LETTERS.indexOf(l3) >= 0) c3 = (l3 === 'OFF' || l3 === 'CL' || l3 === 'LV') ? l3 : inCode(l3);
+        else { res.errors.push(fname + ': "' + l3 + '" for ' + o.name + ' on ' + k3 + ' is not a shift code (M, E, N, NB, G, OFF, CL, LV).'); return row; }
+        if (c3 !== 'OFF' && c3 !== 'CL' && c3 !== 'LV' && !ctx.shifts[c3]) { res.errors.push(fname + ': ' + o.name + ' on ' + k3 + ' has shift ' + l3 + ', which this service does not run.'); return row; }
+        row.push(c3);
+      }
+      return row;
+    });
+    if (res.errors.length) return res;
+    // the roster as followed is the truth: its week-offs are what each person is owed (a leave in it may have changed the count)
+    ctx.offsOf = finalGrid.map(function (row) { return Math.max(0, row.filter(function (c) { return c === 'OFF' || c === 'CL'; }).length - ctx.closed); });
+    res.ctx = ctx; res.inp = inp; res.cand = makeCand(ctx, finalGrid, res.par, res.tls);
+    var fails = res.cand.hard.filter(function (x) { return !x.pass; });
+    if (fails.length) res.warnings.push('This roster breaks ' + fails.length + ' of the hard rules as uploaded (' + fails.slice(0, 3).map(function (x) { return x.name || x.id || x.rule || 'rule'; }).join(', ') + '). New plans built from it can only be shown if they pass every rule, so you may see no plan.');
+    return res;
+  }
   function parsePrevText(text, fname, ctxLite) {
     // ctxLite: {startISO, shifts, peopleNames}
     var res = { states: {}, errors: [], warnings: [], names: [] };
@@ -1994,7 +2241,7 @@ var RM = (function () {
           if (!dd) { res.errors.push(fname + ': ' + pp.name + ' has an invalid last duty end "' + c.lastDutyEnd + '".'); return; }
           le = daysBetween(start, dd) * 1440 + (+m[2]) * 60 + (+m[3]);
         }
-        res.states[pp.name.toLowerCase()] = { workRun: c.workRun | 0, nightRun: c.nightRun | 0, offRun: c.offRun | 0, lastCode: c.lastCode || null, lastEnd: le, balance: +c.hoursBalance || 0, display: pp.name };
+        res.states[pp.name.toLowerCase()] = { workRun: c.workRun | 0, nightRun: c.nightRun | 0, offRun: c.offRun | 0, lastCode: c.lastCode ? inCode(c.lastCode) : null, lastEnd: le, balance: +c.hoursBalance || 0, owed: Math.max(0, c.offsOwed | 0), display: pp.name };
         res.names.push(pp.name);
       });
       return res;
@@ -2002,7 +2249,7 @@ var RM = (function () {
     // CSV
     var lines = t.replace(/\r/g, '').split('\n');
     var head = splitCSVLine(lines[0]).map(function (x) { return x.trim().toLowerCase(); });
-    var ip = head.findIndex(function (x) { return x === 'person' || x === 'name'; }), id = head.indexOf('date'), is = head.indexOf('shift'), ib = head.indexOf('hoursbalance');
+    var ip = head.findIndex(function (x) { return x === 'person' || x === 'name'; }), id = head.indexOf('date'), is = head.indexOf('shift'), ib = head.indexOf('hoursbalance'), iow = head.indexOf('offsowed');
     if (ip < 0 || id < 0 || is < 0) { res.errors.push(fname + ': header must include Person (or Name), Date and Shift columns. Found: ' + lines[0].slice(0, 80)); return res; }
     var byP = {};
     for (var i = 1; i < lines.length; i++) {
@@ -2013,10 +2260,12 @@ var RM = (function () {
       if (!dt) { res.errors.push(fname + ' line ' + (i + 1) + ': "' + cells[id] + '" is not a valid date.'); continue; }
       var code = cells[is].trim().toUpperCase();
       if (code === 'LV' || code === 'L') code = 'OFF';
+      code = inCode(code);
       if (['M', 'E', 'EW', 'N', 'NW', 'NB', 'NBW', 'MW', 'MA', 'G', 'OFF', 'CL'].indexOf(code) < 0) { res.errors.push(fname + ' line ' + (i + 1) + ': shift "' + cells[is] + '" is not one of M, E, EW, N, NB, NBW, G, OFF.'); continue; }
       var nm = cells[ip].trim();
       (byP[nm.toLowerCase()] = byP[nm.toLowerCase()] || { name: nm, rows: [], bal: 0 }).rows.push({ dt: dt, code: code });
       if (ib >= 0 && cells[ib] !== '') byP[nm.toLowerCase()].bal = +cells[ib] || 0;
+      if (iow >= 0 && cells[iow] !== '' && cells[iow] !== undefined) byP[nm.toLowerCase()].owed = Math.max(0, parseInt(cells[iow], 10) || 0);
     }
     Object.keys(byP).forEach(function (k) {
       var o = byP[k], rows = o.rows.filter(function (r) { return r.dt < start; }).sort(function (a, b) { return a.dt - b.dt; });
@@ -2031,7 +2280,7 @@ var RM = (function () {
         if (ctxLite.shifts[cd]) { le = daysBetween(start, rows[q4].dt) * 1440 + ctxLite.shifts[cd].start + ctxLite.shifts[cd].len; break; }
       }
       if (gap > 0) { wr = 0; nr = 0; orr = 0; lc = 'OFF'; }
-      res.states[k] = { workRun: wr, nightRun: nr, offRun: orr, lastCode: lc, lastEnd: le, balance: o.bal, display: o.name };
+      res.states[k] = { workRun: wr, nightRun: nr, offRun: orr, lastCode: lc, lastEnd: le, balance: o.bal, owed: o.owed || 0, display: o.name };
       res.names.push(o.name);
     });
     return res;
@@ -2062,7 +2311,7 @@ var RM = (function () {
   }
 
   function sizeTable(inp, attempts) {
-    var svc = parseService(inp.service.svc), T = teamSize(svc, nByOf(inp.service)), cur = inp.team.men + inp.team.women;
+    var svc = parseService(inp.service.svc, inp.service.pair), T = teamSize(svc, nByOf(inp.service)), cur = inp.team.men + inp.team.women;
     var ratio = cur ? inp.team.women / cur : 0, out = [];
     for (var sz = Math.max(2, T.N - 1); sz <= T.N + 2; sz++) {
       var w = Math.min(sz - 1, Math.round(sz * ratio)); if (svc.H === 24 && sz - w < 1) w = sz - 1;
@@ -2088,7 +2337,7 @@ var RM = (function () {
     parseHM: parseHM, fmtHM: fmtHM, dateFromISO: dateFromISO, iso: iso, addDays: addDays, daysBetween: daysBetween, prettyDate: prettyDate,
     parseService: parseService, nByOf: nByOf, teamSize: teamSize, defaultFirstStart: defaultFirstStart, buildShifts: buildShifts, checkShiftConfig: checkShiftConfig,
     validateInputs: validateInputs, buildContext: buildContext, createSearch: createSearch, finalize: finalize, validate: validate, analyze: analyze,
-    whyText: whyText, toCSV: toCSV, toJSON: toJSON, parseHolidayText: parseHolidayText, mergeHolidays: mergeHolidays, parsePrevText: parsePrevText,
+    setPair: setPair, rosterFromFile: rosterFromFile, makeCand: makeCand, nextVersion: nextVersion, curH: function () { return CUR_H; }, outCode: outCode, inCode: inCode, PAIRS: PAIRS, PAIR16: PAIR16, PAIR8: PAIR8, PAIR_LABEL: PAIR_LABEL, whyText: whyText, toCSV: toCSV, toJSON: toJSON, parseHolidayText: parseHolidayText, mergeHolidays: mergeHolidays, parsePrevText: parsePrevText,
     dayHoursFor: function (svc, S, edits) { var sh = buildShifts(svc, S, edits), L = ['M', 'E', 'N', 'NB'].filter(function (c) { return !!sh[c]; }).map(function (c) { return sh[c].len; }), m = 0; L.forEach(function (x) { m += x; }); return Math.round(m / L.length / 60 * 100) / 100; }, replanLeave: replanLeave, _lp: function () { return localPlans; }, mixTable: mixTable, baseCode: baseCode, isHome: isHome, VARIANTS: VARIANTS, leaveCheck: leaveCheck, leaveCover: leaveCover, holidayModeLabel: holidayModeLabel, isNight: isNight, overlapFor: overlapFor, hashStr: hashStr
   };
 })();
@@ -2134,6 +2383,10 @@ if (typeof module !== 'undefined') module.exports = RM;
   ];
   var LABEL = {}; STEPS.forEach(function (s) { LABEL[s.id] = s.label; });
   function dc(c) { return RM.baseCode(c); }
+  function dd(c) { return RM.outCode(RM.baseCode(c)); }
+  function is16() { var k = RM.curH(); return k === 16 || k === 8; }
+  function SN(c) { var o = RM.outCode(c); if (o === 'N' && is16()) return 'Night'; return SHIFT_NAME[o] || SHIFT_NAME[c] || c; }
+  function SNb(c) { var o = dd(c); if (o === 'N' && is16()) return 'Night'; return SHIFT_NAME[o] || o; }
   function dcodes(ctx) { return Object.keys(ctx.shifts).filter(function (c) { return RM.VARIANTS.indexOf(c) < 0; }); }
   var SHIFT_NAME = { M: 'Morning', E: 'Evening', EW: 'Evening (female)', N: 'Night monitor', NW: 'Night monitor (female)', NB: 'Night backup', NBW: 'Night backup (female evening day)', MW: 'Morning (short)', MA: 'Morning (early)', G: 'General', OFF: 'Week-off', CL: 'Service closed', LV: 'Planned leave' };
 
@@ -2147,7 +2400,7 @@ if (typeof module !== 'undefined') module.exports = RM;
   var TODAY = RM.iso(new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1)));
   var S = {
     inp: {
-      service: { svc: '24x7', n: 1, by: {} },
+      service: { svc: '24x7', pair: 'ME', n: 1, by: {} },
       period: { start: defRange[0], end: defRange[1] },
       team: { men: 3, women: 2, headcount: '', menNames: [], womenNames: [], touched: false },
       holidays: { sources: [], manual: [], mode: 'normal', list: [] },
@@ -2163,11 +2416,11 @@ if (typeof module !== 'undefined') module.exports = RM;
   };
   S.inp.weekoffs.perPerson = defaultWeekoffs();
 
-  function svcObj() { return RM.parseService(S.inp.service.svc); }
+  function svcObj() { var s = RM.parseService(S.inp.service.svc, S.inp.service.pair); RM.setPair(s); return s; }
   // people needed on each shift: the common n, with any per-shift override (Morning, Evening, Night)
   function nByS(n, by) { n = n === undefined ? S.inp.service.n : n; by = by || S.inp.service.by || {}; return { M: by.M >= 1 ? by.M : n, E: by.E >= 1 ? by.E : n, N: by.N >= 1 ? by.N : n }; }
   function perDayS(svc) { var b = nByS(); return b.M + (svc.H >= 16 ? b.E : 0) + (svc.H === 24 ? b.N : 0); }
-  function nLabel() { var svc = svcObj(), b = nByS(); if (!svc) return S.inp.service.n + ' per shift'; var codes = svc.H === 8 ? ['M'] : svc.H === 16 ? ['M', 'E'] : ['M', 'E', 'N']; var same = codes.every(function (c) { return b[c] === b[codes[0]]; }); return same ? b[codes[0]] + ' per shift' : codes.map(function (c) { return c + ' ' + b[c]; }).join(' · '); }
+  function nLabel() { var svc = svcObj(), b = nByS(); if (!svc) return S.inp.service.n + ' per shift'; var codes = svc.H === 8 ? ['M'] : svc.H === 16 ? ['M', 'E'] : ['M', 'E', 'N']; var same = codes.every(function (c) { return b[c] === b[codes[0]]; }); return same ? b[codes[0]] + ' per shift' : codes.map(function (c) { return RM.outCode(c) + ' ' + b[c]; }).join(' · '); }
   function periodDays() {
     var a = RM.dateFromISO(S.inp.period.start), b = RM.dateFromISO(S.inp.period.end);
     if (!a || !b || b < a) return 0;
@@ -2211,7 +2464,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     var i = S.inp, wf = i.team.women > 0 ? womenFit() : null;
     if (wf && !wf.impossible) { i.prev.firstStart = wf.firstStart; i.prev.auto = wf; }
     return {
-      today: TODAY, service: { svc: i.service.svc, n: i.service.n, by: nByS() }, period: { start: i.period.start, end: i.period.end },
+      today: TODAY, service: { svc: i.service.svc, pair: i.service.pair, n: i.service.n, by: nByS() }, period: { start: i.period.start, end: i.period.end },
       team: { men: i.team.men, women: i.team.women, headcount: i.team.headcount, menNames: i.team.menNames, womenNames: i.team.womenNames },
       holidays: { list: i.holidays.list, mode: i.holidays.mode }, weekoffs: { perPerson: i.weekoffs.perPerson }, leaves: validLeaves(), plannedOffs: validPlan(), fixed: validFixed(),
       women: { start: i.women.start, end: i.women.end }, prev: { firstStart: i.prev.firstStart, states: i.prev.states }, rules: Object.assign({}, i.rules)
@@ -2251,6 +2504,26 @@ if (typeof module !== 'undefined') module.exports = RM;
       var cx = RM.buildContext(engineInput());
       cx.forceCnt.forEach(function (n, i) { if (n > cx.extraOffs) out.push({ step: 'holidays', field: 'Planned week-offs', msg: cx.people[i].name + ' has ' + n + ' planned week-offs but only ' + cx.extraOffs + ' week-offs in this period. Remove some or raise the week-offs.' }); });
       cx.fixErr.forEach(function (m) { out.push({ step: 'fixed', field: 'Fixed shifts', msg: m }); });
+      // a planned week-off must fit the rules: the run of week-offs, and the working days left around it
+      cx.people.forEach(function (pp, i) {
+        var fo = cx.forceOff[i]; if (!fo || cx.forceCnt[i] === 0) return;
+        var MW = cx.rules.maxWork, MO = cx.rules.maxOffRun, D = cx.D, run = 0, maxRun = 0, runEnd = 0;
+        for (var d = 0; d < D; d++) { if (fo[d]) { run++; if (run > maxRun) { maxRun = run; runEnd = d; } } else run = 0; }
+        if (maxRun > MO) { out.push({ step: 'rules', field: 'Planned week-offs vs rules', msg: pp.name + ' has ' + maxRun + ' planned week-offs in a row (up to ' + cx.days[runEnd].iso + '), but at most 4 week-offs in a row are allowed. Shorten it.' }); return; }
+        function need(mw) {
+          var n = 0, L = 0;
+          for (var d = 0; d <= D; d++) {
+            var brk = d === D || fo[d] || !cx.days[d].open || (cx.leave[i] && cx.leave[i][d]);
+            if (brk) { if (L > mw) n += Math.ceil((L - mw) / (mw + 1)); L = 0; } else L++;
+          }
+          return n;
+        }
+        var avail = cx.extraOffs - cx.forceCnt[i];
+        if (need(10) > avail) {
+          var fix = null;
+          out.push({ step: 'rules', field: 'Planned week-offs vs rules', msg: pp.name + ': with these planned week-offs only ' + avail + ' more week-off' + (avail === 1 ? ' is' : 's are') + ' left, but even with 10 working days in a row (the highest allowed) it needs ' + need(10) + '. No roster is possible. Give more week-offs per person, or shorten the planned week-off.' });
+        }
+      });
     } catch (e) { /* inputs not complete yet */ }
     return stepOnly ? out.filter(function (e) { return e.step === stepOnly; }) : out;
   }
@@ -2561,8 +2834,8 @@ if (typeof module !== 'undefined') module.exports = RM;
 
   /* service */
   WIDGETS.service = function () {
-    var w = { svc: S.inp.service.svc, n: S.inp.service.n, by: nByS(S.inp.service.n, S.inp.service.by), hc: S.inp.team.headcount };
-    var byBox = h('div', { class: 'bybox' });
+    var w = { svc: S.inp.service.svc, pair: S.inp.service.pair || 'ME', n: S.inp.service.n, by: nByS(S.inp.service.n, S.inp.service.by), hc: S.inp.team.headcount };
+    var byBox = h('div', { class: 'bybox' }), pairBox = h('div', { class: 'pairbox' });
     var est = h('div', { class: 'est' }), cap = h('div', { class: 'capbox' }), chips;
     var hc = numInput({ id: 'f-hc0', placeholder: 'Optional', value: w.hc }, 2);
     hc.addEventListener('input', function () { w.hc = hc.value === '' ? '' : Math.max(0, parseInt(hc.value, 10) || 0); paintCap(); });
@@ -2601,8 +2874,17 @@ if (typeof module !== 'undefined') module.exports = RM;
             h('li', null, 'Spare days a month = ' + T.spare + '. These are the extra days available to cover leave.'))));
     }
     chips = chipGroup(RM.SERVICES.map(function (s) { return { value: s, label: s }; }), function () { return w.svc; }, function (v) { w.svc = v; paint(); paintCap(); }, true);
+    function paintPair() {
+      var sv = RM.parseService(w.svc);
+      if (!sv || (sv.H !== 16 && sv.H !== 8)) { fill(pairBox); return; }
+      var list = sv.H === 16 ? RM.PAIR16 : RM.PAIR8;
+      if (list.indexOf(w.pair) < 0) w.pair = list[0];
+      var g = chipGroup(list.map(function (k) { return { value: k, label: RM.PAIR_LABEL[k] }; }), function () { return w.pair; }, function (v) { w.pair = v; paint(); paintCap(); }, false);
+      fill(pairBox, field(sv.H === 16 ? 'Which two shifts run?' : 'Which shift runs?', g.el, sv.H === 16 ? 'A 16-hour service covers two of the three shifts, back to back. Pick the two the client needs. A night shift in the pair counts toward the nights-in-a-row limit.' : 'An 8-hour service runs one shift. Pick the one the client needs. A night shift counts toward the nights-in-a-row limit.'));
+    }
     function paintBy() {
-      var svc = RM.parseService(w.svc), codes = svc && svc.H === 8 ? ['M'] : svc && svc.H === 16 ? ['M', 'E'] : ['M', 'E', 'N'], names = { M: 'Morning', E: 'Evening', N: 'Night' }, b = nByS(w.n, w.by);
+      var svc = RM.parseService(w.svc, w.pair); RM.setPair(svc); paintPair();
+      var codes = svc && svc.H === 8 ? ['M'] : svc && svc.H === 16 ? ['M', 'E'] : ['M', 'E', 'N'], names = { M: 'Morning', E: 'Evening', N: 'Night' }, b = nByS(w.n, w.by); if (svc && (svc.H === 16 || svc.H === 8)) names = { M: SN('M'), E: SN('E') };
       fill(byBox, h('div', { class: 'grid2' }, codes.map(function (c) {
         var f = numInput({ id: 'f-by' + c, value: b[c], 'aria-label': names[c] + ' shift people' }, 1);
         f.addEventListener('change', function () { var v = parseInt(f.value, 10); w.by[c] = isNaN(v) || v < 1 ? 1 : Math.min(9, v); w.n = w.by.M; paint(); paintCap(); });
@@ -2613,18 +2895,20 @@ if (typeof module !== 'undefined') module.exports = RM;
     var box = errBox();
     return card('Service', [
       field('Service hours', chips.el, 'Hours per day x days per week. 24x7 means round the clock, every day.'),
+      pairBox,
       byBox,
       field('Team size, people you have (optional)', hc, 'Fill this to see which service hours and how many people per shift this team can run.'),
       cap,
-      est, box,
+      box,
       h('div', { class: 'actions' },
-        h('button', { class: 'btn', type: 'button', onclick: function () { saveService(); } }, 'Save and continue'))]);
+        h('button', { class: 'btn', type: 'button', onclick: function () { saveService(); } }, 'Save and continue'),
+        h('button', { class: 'link', type: 'button', id: 'updRoster', onclick: function () { openUpdateFlow(); } }, 'I already have a roster, update it for a leave'))]);
     function saveService() {
-          S.inp.service.svc = w.svc; S.inp.service.n = w.by.M; S.inp.service.by = Object.assign({}, w.by);
+          S.inp.service.svc = w.svc; S.inp.service.pair = w.pair; S.inp.service.n = w.by.M; S.inp.service.by = Object.assign({}, w.by);
           S.inp.team.headcount = w.hc === '' || !w.hc ? '' : Number(w.hc);
           var errs = RM.validateInputs(engineInput()).filter(function (e) { return e.step === 'service'; });
           if (errs.length) return showErrs(box, errs);
-          var svc = RM.parseService(w.svc);
+          var svc = RM.parseService(w.svc, w.pair); RM.setPair(svc);
           if (!S.inp.prev.startTouched) S.inp.prev.firstStart = RM.fmtHM(RM.defaultFirstStart(svc));
           if (!S.inp.weekoffs.touched) S.inp.weekoffs.perPerson = defaultWeekoffs();
           if (!S.inp.team.touched) { var NN = (S.inp.team.headcount || RM.teamSize(svc, nByS(w.n, w.by)).N), wo0 = Math.min(NN - 1, Math.floor((NN - 1) / 2)); if (svc.H === 24 && NN - wo0 < 1) wo0 = NN - 1; S.inp.team.men = NN - wo0; S.inp.team.women = wo0; }
@@ -2718,13 +3002,14 @@ if (typeof module !== 'undefined') module.exports = RM;
         search.step(3);
         var best = null;
         search.found.forEach(function (c) { if (RM.validate(c.cx || ctx, c.grid).every(function (x) { return x.pass; })) { if (!best || c.an.score > best.an.score) best = c; } });
-        if (best) { r.state = 'ok'; r.fair = best.an.score; r.note = ''; return done(); }
+        if (best) { r.state = 'ok'; r.fair = best.an.score; r.note = r.mw ? 'Works with "Max working days in a row" raised to ' + r.mw + ' (done automatically).' : ''; return done(); }
         var wnote = '';
         if (r.women > 0 && !Object.keys(ctx.shifts).some(function (c) { return c !== 'N' && c !== 'NB' && ctx.womanCan[c]; })) wnote = ' No office shift fits the female window (' + S.inp.women.start + '–' + S.inp.women.end + '), so female can only take home nights. Widen the window.';
         if (search.i >= search.attempts) {
           var d = ctx.demand;
           if (d.duties > d.capacity) { r.state = 'no'; r.note = 'Needs ' + d.duties + ' duty days, the team has ' + d.capacity + ' after week-offs.' + wnote; }
           else if (d.menOnly > d.menCap) { r.state = 'no'; r.note = 'Needs ' + d.menOnly + ' male-only duties (night backup), the male have ' + d.menCap + '.' + wnote; }
+          else if (inp.rules.maxWork < 10) { inp.rules = Object.assign({}, inp.rules, { maxWork: inp.rules.maxWork + 1 }); r.mw = inp.rules.maxWork; try { ctx = RM.buildContext(inp); search = RM.createSearch(ctx, 36, 0); } catch (e) { r.state = 'none'; return done(); } setTimeout(tick, 0); return; }
           else { r.state = 'none'; r.note = 'No roster passed every hard rule in a quick check.' + wnote; }
           return done();
         }
@@ -3019,7 +3304,8 @@ if (typeof module !== 'undefined') module.exports = RM;
     function check() {
       var msgs = [];
       try { var cx = RM.buildContext(engineInput()); msgs = cx.planErr.slice(); } catch (e) { msgs = []; }
-      constraintIssues('holidays').forEach(function (e) { msgs.push(e.msg); });
+      constraintIssues('holidays').concat(constraintIssues('rules')).forEach(function (e) { msgs.push(e.msg); });
+      try { if (cx && cx.offRunAuto) msgs.push('Note: because of your planned week-offs, "Max week-offs in a row" is raised to ' + cx.offRunAuto + ' for this roster.'); } catch (e) { /* ignore */ }
       fill(notes, msgs.map(function (m) { return h('div', { class: 'note warn', style: 'margin-top:8px' }, m); }));
     }
     function paint() {
@@ -3063,7 +3349,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     var names = teamNames(), svc = svcObj(), fs = RM.parseHM(S.inp.prev.firstStart), sh = RM.buildShifts(svc, fs === null ? 420 : fs, S.inp.rules.shiftEdits);
     var codes = ['M', 'E', 'N', 'NB', 'G'].filter(function (c) { return sh[c]; });
     var who = h('select', { id: 'f-fxwho' }, names.map(function (n) { return h('option', { value: n }, n); }));
-    var shiftSel = h('select', { id: 'f-fxshift' }, codes.map(function (c) { return h('option', { value: c }, c + ' · ' + SHIFT_NAME[c] + ' ' + RM.fmtHM(sh[c].start) + '–' + RM.fmtHM(sh[c].start + sh[c].len)); }));
+    var shiftSel = h('select', { id: 'f-fxshift' }, codes.map(function (c) { return h('option', { value: c }, RM.outCode(c) + ' · ' + SN(c) + ' ' + RM.fmtHM(sh[c].start) + '–' + RM.fmtHM(sh[c].start + sh[c].len)); }));
     var per0 = S.inp.period, fxFrom = h('input', { type: 'date', id: 'f-fxfrom', min: per0.start, max: per0.end, value: '' }), fxTo = h('input', { type: 'date', id: 'f-fxto', min: per0.start, max: per0.end, value: '' });
     function fxWhen(f) { return f.from || f.to ? ' from ' + (f.from || per0.start) + ' to ' + (f.to || f.from || per0.end) : ' for the whole period'; }
     var tok = {};
@@ -3082,6 +3368,7 @@ if (typeof module !== 'undefined') module.exports = RM;
             search.step(4);
             search.found.forEach(function (c) { if (RM.validate(c.cx || ctx, c.grid).every(function (x) { return x.pass; })) ok = ok || c; });
             if (ok) { fill(status, h('div', { class: 'note ok' }, 'A roster can be built with these fixed shifts (quick check).')); return; }
+            if (search.i >= search.attempts && inp.rules.maxWork < 10) { inp.rules = Object.assign({}, inp.rules, { maxWork: inp.rules.maxWork + 1 }); ctx = RM.buildContext(inp); search = RM.createSearch(ctx, 40, 0); setTimeout(tick, 0); return; }
             if (search.i >= search.attempts) { fill(status, h('div', { class: 'note warn' }, 'No roster passed every hard rule in a quick check. A fixed shift limits who can cover. Try a different shift, fewer fixed people, or a larger team. You can still continue and I will try harder.')); return; }
             setTimeout(tick, 0);
           })();
@@ -3091,7 +3378,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     function paint() {
       fill(listEl, F.list.map(function (f, i) {
         var ok = names.indexOf(f.name) >= 0;
-        return h('div', { class: 'lv' }, h('div', null, h('b', null, f.name), ' · fixed on ' + f.shift + ' (' + (SHIFT_NAME[f.shift] || f.shift) + ')' + fxWhen(f), ok ? null : h('small', null, 'This person is not in the team any more, so this is ignored.')),
+        return h('div', { class: 'lv' }, h('div', null, h('b', null, f.name), ' · fixed on ' + RM.outCode(f.shift) + ' (' + SN(f.shift) + ')' + fxWhen(f), ok ? null : h('small', null, 'This person is not in the team any more, so this is ignored.')),
           h('button', { class: 'link', type: 'button', 'aria-label': 'Remove fixed shift of ' + f.name, onclick: function () { F.list.splice(i, 1); paint(); if (!box.hidden) showErrs(box, constraintIssues('fixed')); } }, 'Remove'));
       }));
       listEl.hidden = !F.list.length;
@@ -3302,18 +3589,12 @@ if (typeof module !== 'undefined') module.exports = RM;
     var si = h('input', { type: 'time', id: 'f-ws', value: w.start }), ei = h('input', { type: 'time', id: 'f-we', value: w.end });
     function paint() {
       var svc = svcObj(), fs = RM.parseHM(S.inp.prev.firstStart), a = RM.parseHM(w.start), b = RM.parseHM(w.end);
-      if (a === null || b === null || a === b) { fill(prev, h('div', { class: 'hint' }, 'Enter both times to see which shifts female can take.')); return; }
+      if (a === null || b === null || a === b) { fill(prev); return; }
       if (b <= a) b += 1440;
       var wf = S.inp.team.women > 0 ? womenFit({ start: w.start, end: w.end }) : null;
       var useStart = wf && !wf.impossible ? RM.parseHM(wf.firstStart) : (fs === null ? 420 : fs);
       var sh = RM.buildShifts(svc, useStart, S.inp.rules.shiftEdits);
       function fitsW(x) { var st = x.start % 1440; return (st >= a && st + x.len <= b) || (st + 1440 >= a && st + 1440 + x.len <= b); }
-      var rows = Object.keys(sh).filter(function (c) { return c !== 'NB'; }).map(function (c) {
-        var x = sh[c], ok = c === 'N' || fitsW(x);
-        return h('div', { class: 'row', style: 'align-items:center;gap:8px;flex-wrap:wrap' },
-          h('span', { class: 'sw c-' + c }, c), h('span', { class: 'mono', style: 'font-family:var(--mono);font-size:12.5px' }, RM.fmtHM(x.start) + '–' + RM.fmtHM(x.start + x.len)),
-          h('span', { class: 'pill ' + (ok ? 'ok' : 'n') }, c === 'N' ? 'Yes, from home' : ok ? 'Yes' : 'No, outside window'));
-      });
       var widen = ['M', 'E'].filter(function (c) { return sh[c] && !fitsW(sh[c]); }).map(function (c) {
         var x = sh[c], st = RM.fmtHM(x.start), en = RM.fmtHM(x.start + x.len);
         return h('button', { type: 'button', class: 'chip mono', onclick: function () { w.start = st; w.end = en; si.value = st; ei.value = en; paint(); } }, 'Widen window to ' + st + '–' + en);
@@ -3322,9 +3603,8 @@ if (typeof module !== 'undefined') module.exports = RM;
       var note = null;
       if (wf && !wf.impossible) note = h('div', { class: 'note ok', style: 'margin-bottom:10px' }, h('b', null, 'Shift timing adjusted to fit the window. '), 'With shifts starting at ' + wf.from + ', no office shift fits female window ' + wf.win + '. I moved the shifts to start at ' + wf.firstStart + ', so the morning shift runs ' + wf.firstStart + '–' + wf.mEnd + ' and female can take it. The female window is unchanged. The rows below show the adjusted timings.');
       else if (noFit) note = h('div', { class: 'note warn', style: 'margin-top:10px' }, h('b', null, 'No office shift fits this window. '), 'Female could only take night shifts from home, so a roster with female usually cannot be built. The window is shorter than a shift, so timing cannot be moved to fit it. Widen the window:', h('div', { class: 'chips', style: 'margin-top:8px' }, widen));
-      fill(prev, note, h('div', { class: 'big' }, 'Which shifts female can take with this window'), rows,
-        wf && !wf.impossible ? h('div', { class: 'hint', style: 'margin-top:8px' }, 'Prefer to keep the ' + wf.from + ' start? Widen the window instead:', h('div', { class: 'chips', style: 'margin-top:6px' }, widen)) : null,
-        h('div', { class: 'hint' }, S.inp.rules.nbMode === 'none' ? 'No night backup is planned (changeable in Rest and duty rules).' : 'Night backup (NB) is always a male in the office.'));
+      fill(prev, note,
+        wf && !wf.impossible ? h('div', { class: 'hint', style: 'margin-top:8px' }, 'Prefer to keep the ' + wf.from + ' start? Widen the window instead:', h('div', { class: 'chips', style: 'margin-top:6px' }, widen)) : null);
     }
     si.addEventListener('input', function () { w.start = si.value; paint(); }); ei.addEventListener('input', function () { w.end = ei.value; paint(); });
     paint();
@@ -3408,7 +3688,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     var R = S.inp.rules, w = Object.assign({}, R), box = errBox();
     var edits = JSON.parse(JSON.stringify(R.shiftEdits || {}));
     var svc = svcObj(), fs = RM.parseHM(S.inp.prev.firstStart), base = RM.buildShifts(svc, fs === null ? 420 : fs, null);
-    var defs = [['minRestH', 'Minimum rest between duties (hours)', 10, 16], ['maxNights', 'Max nights in a row', 1, 5], ['maxWork', 'Max working days in a row', 1, 14], ['maxOffRun', 'Max week-offs in a row', 1, 7], ['maxDutyH', 'Longest single duty (hours)', 1, 16], ['overlapMin', 'Handover overlap (minutes)', 0, 240]];
+    var defs = [['minRestH', 'Minimum rest between duties (hours)', 10, 16], ['maxNights', 'Max nights in a row', 2, 8], ['maxWork', 'Max working days in a row', 5, 10], ['maxOffRun', 'Max week-offs in a row', 1, 4], ['maxDutyH', 'Longest single duty (hours)', 1, 12], ['overlapMin', 'Handover overlap (minutes)', 20, 240]];
     var inputs = {};
     var grid = h('div', { class: 'grid3' }, defs.map(function (d) {
       var s = stepper(w[d[0]], d[2], d[3], function (v) { w[d[0]] = v; }, 'f-' + d[0]); inputs[d[0]] = s;
@@ -3421,7 +3701,7 @@ if (typeof module !== 'undefined') module.exports = RM;
       var cur = edits[c] || { start: RM.fmtHM(base[c].start), len: base[c].len / 60 };
       var ti = h('input', { type: 'time', id: 'f-sh-' + c, value: cur.start }), li = numInput({ id: 'f-shl-' + c, value: cur.len }, 4, true);
       shiftInputs[c] = { ti: ti, li: li, base: base[c] };
-      sg.append(h('span', { class: 'sw c-' + c, style: 'width:auto;padding:2px 8px;justify-self:start' }, c + ' · ' + SHIFT_NAME[c]), ti, li);
+      sg.append(h('span', { class: 'sw c-' + c, style: 'width:auto;padding:2px 8px;justify-self:start' }, RM.outCode(c) + ' · ' + SN(c)), ti, li);
     });
     var nbSel = null, nbBtn = null;
     if (svc.H === 24 && S.inp.team.women > 0) {
@@ -3444,7 +3724,7 @@ if (typeof module !== 'undefined') module.exports = RM;
       h('div', { class: 'actions' },
         h('button', { class: 'btn', type: 'button', onclick: function () {
           var old = S.inp.rules; S.inp.rules = Object.assign({}, w, { shiftEdits: collectEdits() });
-          var errs = RM.validateInputs(engineInput()).filter(function (e) { return e.step === 'rules'; });
+          var errs = RM.validateInputs(engineInput()).filter(function (e) { return e.step === 'rules'; }).concat(constraintIssues('rules'));
           if (errs.length) { S.inp.rules = old; return showErrs(box, errs); }
           if (S.inp.prev.mode === 'file') reparsePrev();
           save('rules', S.inp.rules.shiftEdits || JSON.stringify(Object.assign({}, S.inp.rules, { shiftEdits: null })) !== JSON.stringify(RM.DEFAULT_RULES) ? 'Custom rules saved' : 'Default rules');
@@ -3477,6 +3757,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     if (S.running) return;
     var errs = RM.validateInputs(engineInput()).concat(prevIssues()).concat(constraintIssues());
     if (errs.length) { review(); return; }
+    S.vs = null; S.uploaded = false; S.openSudden = false;
     S.running = true; clearWidget(); if (!arguments[0]) userSays(S.seedOffset ? 'Try a different set of rosters' : 'Find the best 5 rosters');
     S.active = null; renderPanel();
     var bar = h('i'), txt = h('div', { class: 'hint' }, 'Starting…');
@@ -3484,11 +3765,15 @@ if (typeof module !== 'undefined') module.exports = RM;
     say('Building rosters now. This takes a few seconds.');
     Q = Q.then(function () { chat.append(pc); scrollTo(pc); return wait(60); }).then(function () {
       S.emerg = null; var EMERG = [null, { maxWork: 8, maxNights: 5 }, { maxWork: 10, maxNights: 7 }, { maxWork: 14, maxNights: 10 }, { maxWork: 20, maxNights: 16 }, { maxWork: 31, maxNights: 31 }, { maxWork: 31, maxNights: 31, minRestH: 8 }, { maxWork: 31, maxNights: 31, minRestH: 0, maxDutyH: 16, maxOffRun: 7 }];
-      var inp0 = engineInput(); inp0.floorMaxWork = inp0.rules.maxWork; inp0.floorMaxNights = inp0.rules.maxNights; var relax = 0, emerg = 0, ctx = RM.buildContext(inp0), MAX = 700, t0 = performance.now();
+      var inp0 = engineInput(); inp0.floorMaxWork = inp0.rules.maxWork; inp0.floorMaxNights = inp0.rules.maxNights; var relax = 0, emerg = 0, mwAuto = 0, mwBase = inp0.rules.maxWork; S.mwAuto = 0; var ctx = RM.buildContext(inp0), MAX = 700, t0 = performance.now();
       var search = RM.createSearch(ctx, MAX, S.seedOffset);
       return new Promise(function (res) {
         (function tick() {
           var done = search.step(4);
+          if (!ctx.leaveN && emerg === 0 && search.i >= 60 && !search.found.length && mwBase + mwAuto < 10) {
+            mwAuto++; inp0.rules = Object.assign({}, inp0.rules, { maxWork: mwBase + mwAuto }); S.mwAuto = mwBase + mwAuto;
+            ctx = RM.buildContext(inp0); search = RM.createSearch(ctx, MAX, S.seedOffset); setTimeout(tick, 0); return;
+          }
           if (ctx.leaveN && search.i >= 60 && !search.found.length) {
             var fatal = RM.leaveCheck(ctx).some(function (m) { return m.fatal; });
             if (emerg === 0 && !fatal && relax < 3) {
@@ -3507,6 +3792,7 @@ if (typeof module !== 'undefined') module.exports = RM;
         })();
       });
     }).then(function (r) {
+      if (!r.search.found.length) S.mwAuto = 0;
       var fin = RM.finalize(r.ctx, r.search, 5);
       pc.remove(); S.running = false;
       showResults(r.ctx, r.search, fin);
@@ -3517,13 +3803,14 @@ if (typeof module !== 'undefined') module.exports = RM;
   }
 
   /* ---------- results ---------- */
-  function swatch(c) { return h('span', { class: 'sw c-' + c }, c === 'NB' || c === 'NBW' ? 'B' : c === 'OFF' ? '–' : c === 'LV' ? 'L' : c); }
+  function swatch(c) { /* c is a display letter */
+    return h('span', { class: 'sw c-' + c }, c === 'NB' || c === 'NBW' ? 'B' : c === 'OFF' ? '–' : c === 'LV' ? 'L' : c); }
   function legend(ctx) {
-    return h('div', { class: 'legend' }, ['M', 'E', 'N', 'NB', 'G', 'OFF'].filter(function (c) { return !ctx || ctx.shifts[c] || c === 'OFF'; }).map(function (c) { return h('span', null, swatch(c), SHIFT_NAME[c]); }), h('span', null, h('span', { class: 'sw', style: 'border:1px solid var(--line)' }, 'h'), 'Night from home'), ctx && ctx.shifts.EW ? h('span', null, h('span', { class: 'sw var' }, 'M'), 'Timing changes because a female has the evening') : null, ctx && ctx.leaveN ? h('span', null, swatch('LV'), 'Planned leave') : null, ctx && ctx.forceCnt && ctx.forceCnt.some(function (n) { return n > 0; }) ? h('span', null, h('span', { class: 'sw pwsw' }, '–'), 'Planned week-off (asked for)') : null, ctx && ctx.leaveN ? h('span', null, h('span', { class: 'sw cov' }), 'Takes over a shift from someone on leave') : null);
+    return h('div', { class: 'legend' }, ['M', 'E', 'N', 'NB', 'G', 'OFF'].filter(function (c) { return !ctx || ctx.shifts[c] || c === 'OFF'; }).map(function (c) { return h('span', null, swatch(RM.outCode(c)), SN(c)); }), (is16() ? null : h('span', null, h('span', { class: 'sw', style: 'border:1px solid var(--line)' }, 'h'), 'Night from home')), ctx && ctx.shifts.EW ? h('span', null, h('span', { class: 'sw var' }, 'M'), 'Timing changes because a female has the evening') : null, ctx && ctx.leaveN ? h('span', null, swatch('LV'), 'Planned leave') : null, ctx && ctx.forceCnt && ctx.forceCnt.some(function (n) { return n > 0; }) ? h('span', null, h('span', { class: 'sw pwsw' }, '–'), 'Planned week-off (asked for)') : null, ctx && ctx.leaveN ? h('span', null, h('span', { class: 'sw cov' }), 'Takes over a shift from someone on leave') : null);
   }
   function miniMap(ctx, cand) {
     return h('div', { class: 'mini', 'aria-hidden': 'true' }, cand.grid.map(function (row) {
-      return h('div', null, row.map(function (c) { return h('i', { class: 'c-' + dc(c) }); }));
+      return h('div', null, row.map(function (c) { return h('i', { class: 'c-' + dd(c) }); }));
     }));
   }
   function partBars(an) {
@@ -3559,7 +3846,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     if (c === 'OFF') return 'Week-off (no cover needed)';
     if (c === 'CL') return 'Service closed';
     var x = ctx.shifts[c]; if (!x) return c;
-    return SHIFT_NAME[dc(c)] + ' ' + RM.fmtHM(x.start) + '–' + RM.fmtHM(x.start + x.len);
+    return SNb(c) + ' ' + RM.fmtHM(x.start) + '–' + RM.fmtHM(x.start + x.len);
   }
   function wkAdj(ctx, cand) {
     var W = ctx.extraOffs, rows = [];
@@ -3579,7 +3866,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     rows.forEach(function (r) {
       r.covers.forEach(function (q) { cnt[q] = (cnt[q] || 0) + 1; });
       var cov = r.covers.map(function (q) { return ctx.people[q].name; });
-      var oth = r.changes.filter(function (c) { return r.covers.indexOf(c.q) < 0; }).map(function (c) { return ctx.people[c.q].name + ': ' + (c.from === 'OFF' || c.from === 'CL' ? 'week-off' : dc(c.from)) + ' → ' + (c.to === 'OFF' || c.to === 'CL' ? 'week-off' : dc(c.to)); });
+      var oth = r.changes.filter(function (c) { return r.covers.indexOf(c.q) < 0; }).map(function (c) { return ctx.people[c.q].name + ': ' + (c.from === 'OFF' || c.from === 'CL' ? 'week-off' : dd(c.from)) + ' → ' + (c.to === 'OFF' || c.to === 'CL' ? 'week-off' : dd(c.to)); });
       var none = r.missed === 'OFF' || r.missed === 'CL';
       tb.append(h('tr', null,
         h('td', { style: 'white-space:nowrap' }, RM.DOW[r.dow] + ' ' + r.iso),
@@ -3616,7 +3903,7 @@ if (typeof module !== 'undefined') module.exports = RM;
       var tr = h('tr', null, h('td', { class: 'nm' }, pp.name, h('span', { class: 'tag' }, pp.tag), ctx.fixedOf && ctx.fixedOf[p] ? h('span', { class: 'tag fx', title: 'Works only ' + ctx.fixedOf[p] + ' on working days' }, 'Fixed ' + ctx.fixedOf[p]) : null));
       cand.grid[p].forEach(function (c, d) {
         var cv = cmap[p + ':' + d];
-        var td = h('td', { class: 'c c-' + dc(c) + (RM.isHome(ctx, pp, c) ? ' home' : '') + (dc(c) !== c ? ' var' : '') + (ctx.forceOff && ctx.forceOff[p] && ctx.forceOff[p][d] ? ' pw' : '') + (cv || (cand.note && cand.baseGrid && c !== 'LV' && cand.baseGrid[p][d] !== c) ? ' cov' : ''), tabindex: '0', role: 'button', 'aria-label': pp.name + ' ' + ctx.days[d].iso + ' ' + (SHIFT_NAME[c] || c) + (cv ? ', covering ' + cv.map(function (x) { return x.name; }).join(', ') : '') }, c === 'LV' ? 'L' : c === 'OFF' || c === 'CL' ? '–' : dc(c) === 'NB' ? 'B' : dc(c));
+        var td = h('td', { class: 'c c-' + dd(c) + (RM.isHome(ctx, pp, c) ? ' home' : '') + (dc(c) !== c ? ' var' : '') + (ctx.forceOff && ctx.forceOff[p] && ctx.forceOff[p][d] ? ' pw' : '') + (cv || (cand.note && cand.baseGrid && c !== 'LV' && cand.baseGrid[p][d] !== c) ? ' cov' : ''), tabindex: '0', role: 'button', 'aria-label': pp.name + ' ' + ctx.days[d].iso + ' ' + SN(c) + (cv ? ', covering ' + cv.map(function (x) { return x.name; }).join(', ') : '') }, c === 'LV' ? 'L' : c === 'OFF' || c === 'CL' ? '–' : dc(c) === 'NB' ? 'B' : dd(c));
         function sel() { cells.forEach(function (x) { x.classList.remove('sel'); }); td.classList.add('sel'); pick(p, d); }
         td.addEventListener('click', sel); td.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sel(); } });
         cells.push(td); tr.append(td);
@@ -3642,7 +3929,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     if (c === 'OFF') return base + ' · Week-off';
     if (c === 'CL') return base + ' · Service closed, counts as week-off';
     var x = ctx.shifts[c], ov = RM.overlapFor(ctx, c);
-    return base + ' · ' + SHIFT_NAME[c] + ' ' + RM.fmtHM(x.start) + '–' + RM.fmtHM(x.start + x.len) + ' · ' + (x.len / 60) + ' h · ' + (RM.isHome(ctx, pp, c) ? 'home' : 'office') + (ov ? ' · handover overlap ' + ov + ' min' : '') + (function () { var cv = coverMap(ctx, cand)[p + ':' + d]; return cv ? ' · Covering ' + cv.map(function (x) { return x.name + ' (on leave)'; }).join(', ') : ''; })();
+    return base + ' · ' + SN(c) + ' ' + RM.fmtHM(x.start) + '–' + RM.fmtHM(x.start + x.len) + ' · ' + (x.len / 60) + ' h · ' + (RM.isHome(ctx, pp, c) ? 'home' : 'office') + (ov ? ' · handover overlap ' + ov + ' min' : '') + (function () { var cv = coverMap(ctx, cand)[p + ':' + d]; return cv ? ' · Covering ' + cv.map(function (x) { return x.name + ' (on leave)'; }).join(', ') : ''; })();
   }
   function ruleList(items, hard) {
     return h('ul', { class: 'rl' }, items.map(function (r) { return h('li', null, h('i', { class: r.pass ? 'p' : (hard ? 'f' : 'm') }, r.id), h('span', null, r.name, h('small', null, r.detail))); }));
@@ -3654,7 +3941,7 @@ if (typeof module !== 'undefined') module.exports = RM;
   function cellWord(ctx, c) {
     if (c === 'OFF' || c === 'CL') return 'week-off';
     if (c === 'LV') return 'leave';
-    var x = ctx.shifts[c]; return SHIFT_NAME[dc(c)] + (x ? ' ' + RM.fmtHM(x.start) + '–' + RM.fmtHM(x.start + x.len) : '');
+    var x = ctx.shifts[c]; return SNb(c) + (x ? ' ' + RM.fmtHM(x.start) + '–' + RM.fmtHM(x.start + x.len) : '');
   }
   function planCard(ctx0, res, plan, idx, onApply, name) {
     var ctx = res.ctx, ch = plan.changes.slice().sort(function (a, b) { return a.d - b.d || a.q - b.q; });
@@ -3680,42 +3967,98 @@ if (typeof module !== 'undefined') module.exports = RM;
       plan.changes.length ? h('details', null, h('summary', null, 'See every change (' + plan.changes.length + ')'), h('div', { class: 'scroll' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Date', 'Who', 'Was', 'Now'].map(function (t) { return h('th', null, t); }))), tb)), plan.changes.length > 40 ? h('div', { class: 'hint' }, 'First 40 shown. The roster grid has all of them.') : null) : null,
       h('div', { class: 'actions' }, apply));
   }
+
+  /* ---------- roster versions: v1, v1.1, v1.2 ... ---------- */
+  function vsEntry(cand) { if (!S.vs) return null; for (var i = 0; i < S.vs.list.length; i++) if (S.vs.list[i].cand === cand) return S.vs.list[i]; return null; }
+  function verOf(cand) { var e = vsEntry(cand); return e ? e.v : null; }
+  function vsStart(ctx, cand, rank, seedLabel, version, prior, note) {
+    S.vs = { list: [{ v: version || '1', note: note || 'First roster', ctx: ctx, cand: cand, rank: rank, seedLabel: seedLabel, at: new Date().toISOString() }], prior: prior || [] };
+    return S.vs.list[0];
+  }
+  function vsAdd(prevCand, ctx, cand, note, rank, seedLabel) {
+    var last = vsEntry(prevCand) || S.vs.list[S.vs.list.length - 1];
+    var mx = S.vs.list.reduce(function (m, x) { return cmpVer(x.v, m) > 0 ? x.v : m; }, last.v);
+    var e = { v: RM.nextVersion(mx), note: note, ctx: ctx, cand: cand, rank: rank, seedLabel: seedLabel, at: new Date().toISOString(), from: last.v };
+    S.vs.list.push(e); return e;
+  }
+  function cmpVer(a, b) { var x = String(a).split('.').map(Number), y = String(b).split('.').map(Number); for (var i = 0; i < Math.max(x.length, y.length); i++) { var d = (x[i] || 0) - (y[i] || 0); if (d) return d; } return 0; }
+  function vsHistory() { if (!S.vs) return []; var seen = {}, out = []; S.vs.prior.concat(S.vs.list.map(function (e) { return { v: e.v, note: e.note, at: e.at }; })).forEach(function (x) { if (!seen[x.v]) { seen[x.v] = 1; out.push(x); } }); return out; }
+  function fmtAt(iso) { try { var d = new Date(iso); return d.getDate() + ' ' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getMonth()] + ', ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); } catch (e) { return ''; } }
+  function versionBlock(cand) {
+    if (!S.vs || !vsEntry(cand)) return null;
+    var cur = vsEntry(cand), chips = h('div', { class: 'vchips' });
+    S.vs.list.slice().sort(function (a, b) { return cmpVer(a.v, b.v); }).forEach(function (e) {
+      var b = h('button', { type: 'button', class: 'vchip' + (e === cur ? ' on' : ''), title: e.note, 'aria-pressed': String(e === cur) }, 'v' + e.v);
+      b.addEventListener('click', function () { if (e !== cur) openRoster(e.ctx, e.cand, e.rank, e.seedLabel, true); });
+      chips.append(b);
+    });
+    var hist = vsHistory().slice().sort(function (a, b) { return cmpVer(a.v, b.v); });
+    return h('details', { class: 'vers', open: S.vs.list.length > 1 ? true : null },
+      h('summary', null, h('b', null, 'Versions'), h('span', { class: 'pill n' }, 'Now v' + cur.v), h('span', { class: 'hint' }, S.vs.list.length > 1 ? S.vs.list.length + ' versions of this roster' : 'Mark a leave below to make v' + RM.nextVersion(cur.v))),
+      chips,
+      h('div', { class: 'scroll' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Version', 'When', 'What changed'].map(function (t) { return h('th', null, t); }))),
+        h('tbody', null, hist.map(function (x) { return h('tr', null, h('td', null, h('b', null, 'v' + x.v)), h('td', { style: 'white-space:nowrap' }, x.at ? fmtAt(x.at) : ''), h('td', null, x.note)); })))));
+  }
+  function flexText(res) {
+    var p = [];
+    if (res.leaverCut) p.push(Object.keys(res.leaverCut).map(function (k) { return k + ' (on leave) takes the minimum, ' + res.leaverCut[k] + ' fewer, because leave counts as rest'; }).join('; '));
+    if (res.gave) p.push(Object.keys(res.gave).map(function (k) { return k + ': ' + res.gave[k] + ' fewer, owed to next month'; }).join('; '));
+    return p.join('; ');
+  }
+  function relaxParts(rx, base) {
+    var p = [];
+    if (rx.maxWork > base.maxWork) p.push('working days in a row ' + base.maxWork + ' → ' + rx.maxWork);
+    if (rx.maxNights > base.maxNights) p.push('nights in a row ' + base.maxNights + ' → ' + rx.maxNights);
+    if (rx.minRestH < base.minRestH) p.push('rest between duties ' + base.minRestH + ' h → ' + rx.minRestH + ' h');
+    return p;
+  }
   function suddenPanel(ctx, cand, rank, seedLabel, isFinal, hook) {
     var who = h('select', { id: 'sl-who', 'aria-label': 'Who is on leave' }, ctx.people.map(function (p) { return h('option', { value: p.name }, p.name + ' (' + (p.w ? 'female' : 'male') + ')'); }));
     var first = ctx.days[0].iso, last = ctx.days[ctx.D - 1].iso, dflt = REAL_TODAY >= first && REAL_TODAY <= last ? REAL_TODAY : first;
     var from = h('input', { type: 'date', id: 'sl-from', value: dflt, min: first, max: last }), to = h('input', { type: 'date', id: 'sl-to', value: dflt, min: first, max: last });
+    var wf = h('input', { type: 'date', id: 'sl-wfrom', value: dflt, min: first, max: last }), wt = h('input', { type: 'date', id: 'sl-wto', value: last, min: first, max: last });
     var out = h('div', { class: 'slout' }), go = h('button', { class: 'btn', type: 'button' }, 'Show who can cover');
-    var det = h('details', { class: 'sud', id: 'sudPanel' },
+    var det = h('details', { class: 'sud', id: 'sudPanel', open: S.openSudden ? true : null },
       h('summary', null, h('span', { class: 'ico' }, '⚡'), h('span', null, h('b', null, 'Sudden leave? '), 'Mark it here and see who covers the shifts')),
       h('div', { class: 'sb' },
         h('p', { class: 'hint', style: 'margin:0 0 10px' }, 'Days before the leave stay exactly as they are. Only the days from the leave onwards are re-planned, with as few changes as possible.'),
         h('div', { class: 'slrow' }, h('div', { class: 'field' }, h('label', null, 'Who'), btnSelect(who)), field('Leave from', from), field('Leave to', to)),
+        h('div', { class: 'slrow' }, field('Roster may change from', wf, 'Days before this date stay exactly as followed. It cannot be after the leave starts.'), field('Roster may change up to', wt, 'Days after this date are not touched. If a plan needs changes later than this, it is not shown.')),
         h('div', { class: 'actions' }, go), out));
     hook.fill = function (p, d) { who.value = ctx.people[p].name; from.value = ctx.days[d].iso; if (to.value < from.value) to.value = from.value; det.open = true; try { det.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) { /* ignore */ } };
-    from.addEventListener('change', function () { if (to.value < from.value) to.value = from.value; });
+    from.addEventListener('change', function () { if (to.value < from.value) to.value = from.value; wf.value = from.value; });
     go.addEventListener('click', function () {
-      var nm = who.value, a = from.value, b = to.value || a;
+      var nm = who.value, a = from.value, b = to.value || a, wA = wf.value || a, wB = wt.value || last;
+      if (wA > a) wA = a;
+      if (wB < b) { fill(out, h('div', { class: 'note warn' }, 'The last day the roster may change (' + RM.prettyDate(wB) + ') is before the leave ends (' + RM.prettyDate(b) + '). Move it to the leave end or later.')); return; }
       if (!a || b < a) { fill(out, h('div', { class: 'note warn' }, 'Pick a start date, and make the end date the same day or later.')); return; }
       go.disabled = true; go.textContent = 'Working it out…';
       fill(out, h('div', { class: 'hint' }, 'Looking for the smallest change that keeps every rule…'));
       setTimeout(function () {
         var res;
-        try { res = RM.replanLeave(ctx, cand, nm, a, b, 40); } catch (e) { res = null; console.error(e); }
+        try { res = RM.replanLeave(ctx, cand, nm, a, b, 40, { lockFrom: wA, endISO: wB < last ? wB : null }); } catch (e) { res = null; console.error(e); }
         go.disabled = false; go.textContent = 'Show who can cover';
         if (!res || !res.plans.length) {
-          var why = res && res.check && res.check.length ? res.check.map(function (m) { return h('div', null, m.msg); }) : [h('div', null, 'No valid cover was found for these dates.')];
+          var why = res && res.check && res.check.length ? res.check.map(function (m) { return h('div', null, m.msg); }) : [h('div', null, 'No valid cover was found for these dates' + (wB < last ? ' with changes only up to ' + RM.prettyDate(wB) + '. Try a later last day.' : '.'))];
           fill(out, h('div', { class: 'note warn' }, h('b', null, 'No cover without breaking a rule. '), why, h('div', { class: 'hint', style: 'margin-top:6px' }, 'Options: shorten the leave, give a temporary resource for those days, or add a person.')));
           return;
         }
         var cards = res.plans.map(function (pl, i) {
           return planCard(ctx, res, pl, i, function (plan) {
-            S.inp.leave.list.push({ name: nm, from: a, to: b, reason: 'Sudden leave' });
-            plan.note = nm + ' on leave ' + (a === b ? RM.prettyDate(a) : RM.prettyDate(a) + ' to ' + RM.prettyDate(b)) + '. Days before ' + RM.prettyDate(a) + ' are unchanged. Changed cells have a ring.';
-            markStale();
-            openRoster(res.ctx, plan, rank, seedLabel, isFinal);
+            if (!S.uploaded) { S.inp.leave.list.push({ name: nm, from: a, to: b, reason: 'Sudden leave' }); markStale(); }
+            if (!vsEntry(cand)) vsStart(ctx, cand, rank, seedLabel, '1', [], 'First roster');
+            var affected = {}; plan.changes.forEach(function (c) { affected[ctx.people[c.q].name] = 1; });
+            var note = nm + ' on leave ' + (a === b ? RM.prettyDate(a) : RM.prettyDate(a) + ' to ' + RM.prettyDate(b)) + '. Followed as planned till ' + RM.prettyDate(RM.iso(RM.addDays(RM.dateFromISO(wA), -1))) + (wB < last ? ', changes only up to ' + RM.prettyDate(wB) : '') + (res.relaxed ? '. Limits relaxed to cover every shift: ' + relaxParts(res.relaxed, ctx.rules).join(', ') : '') + (flexText(res) ? '. Week-offs: ' + flexText(res) : '') + '. ' + plan.changes.length + ' shift change' + (plan.changes.length === 1 ? '' : 's') + ', ' + Object.keys(affected).length + (Object.keys(affected).length === 1 ? ' person' : ' people') + ' affected.';
+            plan.note = note + ' Changed cells have a ring.';
+            vsAdd(cand, res.ctx, plan, note, rank, seedLabel);
+            openRoster(res.ctx, plan, rank, seedLabel, true);
           }, nm);
         });
-        fill(out, h('div', { class: 'ok-line' }, 'Found ' + res.plans.length + ' valid plan' + (res.plans.length > 1 ? 's' : '') + '. All 12 hard rules pass in each.'), h('div', { class: 'plans' }, cards));
+        var rx = res.relaxed, relaxTxt = rx ? relaxParts(rx, ctx.rules).join(', ') : '';
+        var gv = flexText(res);
+        fill(out, h('div', { class: 'ok-line' }, 'Found ' + res.plans.length + ' valid plan' + (res.plans.length > 1 ? 's' : '') + (rx ? '. Every shift is covered, but only with relaxed limits.' : '. All 12 hard rules pass in each.')),
+          rx || gv ? h('div', { class: 'note warn', style: 'margin:8px 0' }, h('b', null, 'Every shift is covered, with some give and take. '), [gv ? 'Week-offs: ' + gv : '', rx ? 'limits relaxed: ' + relaxTxt : ''].filter(Boolean).join('. ') + '. This is written in the Summary and carried to next month.') : null,
+          h('div', { class: 'plans' }, cards));
       }, 30);
     });
     return det;
@@ -3730,12 +4073,13 @@ if (typeof module !== 'undefined') module.exports = RM;
     });
     var pickBox = h('div', { class: 'pick' }, 'Tap any cell to see its start, end, length, home or office and handover overlap.');
     var carry = JSON.parse(RM.toJSON(ctx, cand, seedLabel)).people;
-    var carryTbl = h('div', { class: 'scroll' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Person', 'Days in a row', 'Nights in a row', 'Last duty ended', 'Hours balance'].map(function (t, i) { return h('th', { class: i ? 'num' : '' }, t); }))),
-      h('tbody', null, carry.map(function (p) { return h('tr', null, h('td', null, p.name), h('td', { class: 'num' }, p.carry.workRun), h('td', { class: 'num' }, p.carry.nightRun), h('td', { class: 'num' }, p.carry.lastDutyEnd ? p.carry.lastDutyEnd.replace('T', ' ').slice(5) : '–'), h('td', { class: 'num' }, (p.carry.hoursBalance > 0 ? '+' : '') + p.carry.hoursBalance + ' h')); }))));
+    var carryTbl = h('div', { class: 'scroll' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Person', 'Days in a row', 'Nights in a row', 'Last duty ended', 'Hours balance', 'Week-offs owed'].map(function (t, i) { return h('th', { class: i ? 'num' : '' }, t); }))),
+      h('tbody', null, carry.map(function (p) { return h('tr', null, h('td', null, p.name), h('td', { class: 'num' }, p.carry.workRun), h('td', { class: 'num' }, p.carry.nightRun), h('td', { class: 'num' }, p.carry.lastDutyEnd ? p.carry.lastDutyEnd.replace('T', ' ').slice(5) : '–'), h('td', { class: 'num' }, (p.carry.hoursBalance > 0 ? '+' : '') + p.carry.hoursBalance + ' h'), h('td', { class: 'num' }, p.carry.offsOwed || 0)); }))));
     var p0 = an.per[0];
     var holNote = ctx.days.filter(function (d) { return d.hol; }).map(function (d) { return d.iso + ' ' + d.hol.name; });
     var tabs = [
       { id: 'roster', label: 'Roster', kids: [
+      inCard ? null : versionBlock(cand),
       inCard ? null : suddenPanel(ctx, cand, rank, seedLabel, !!isFinalGlobal, hook),
       cand.note ? h('div', { class: 'note ok2' }, cand.note) : null,
       h('div', null, h('h4', null, 'Roster'), zoomBar(rt), rt, pickBox, legend(ctx)),
@@ -3815,14 +4159,16 @@ if (typeof module !== 'undefined') module.exports = RM;
   function summaryData(ctx, cand) {
     var an = cand.an, has = function (c) { return !!ctx.shifts[c]; };
     var cols = [['Member', null]];
-    cols.push(['Morning', 'Days on the morning shift']);
-    if (has('E')) cols.push(['Evening', 'Days on the evening shift']);
+    cols.push([SN('M'), 'Days on the ' + SN('M').toLowerCase() + ' shift']);
+    if (has('E')) cols.push([SN('E'), 'Days on the ' + SN('E').toLowerCase() + ' shift']);
     if (has('N')) cols.push(['Night monitor', 'Nights on the night monitoring shift (female do this from home)']);
     if (has('NB')) cols.push(['Night backup', 'Nights as the night backup in the office (male only)']);
-    if (has('N')) cols.push(['Total nights', 'Night monitor + night backup']);
+    if (has('N') || RM.outCode('M') === 'N' || RM.outCode('E') === 'N') cols.push(['Total nights', 'Night monitor + night backup']);
     cols.push(['General', 'Days on the general (day) shift']);
     cols.push(['Days worked', 'Days this person is on duty in this roster. Holidays worked are included here']);
+    var anyOwed = an.per.some(function (p) { return p.carryOwed > 0; });
     cols.push(['Week-offs taken', 'Days off in this roster']);
+    if (anyOwed) cols.push(['Week-offs owed', 'Week-offs this person should have had but could not get, so shifts stay covered. They carry forward to next month']);
     if (ctx.leaveN) cols.push(['Leave days', 'Planned leave days. These are separate from week-offs']);
     cols.push(['Hours worked', 'Total hours of all duties']);
     cols.push(['Expected hours', 'Expected duty hours for the period: ' + ctx.dayH + ' h × (working days in the period − this person\'s leave days). Compare with Hours worked']);
@@ -3836,8 +4182,8 @@ if (typeof module !== 'undefined') module.exports = RM;
       if (has('E')) r.push(p.Ef);
       if (has('N')) r.push(p.Nf);
       if (has('NB')) r.push(p.NBf);
-      if (has('N')) r.push(p.nights);
-      r.push(p.G, p.duty, p.off); if (ctx.leaveN) r.push(p.leave); r.push(p.hours); r.push(p.target); r.push(Math.round((p.hours - avg) * 10) / 10, p.wk, p.hol);
+      if (has('N') || RM.outCode('M') === 'N' || RM.outCode('E') === 'N') r.push(p.nights);
+      r.push(p.G, p.duty, p.off); if (anyOwed) r.push(p.carryOwed); if (ctx.leaveN) r.push(p.leave); r.push(p.hours); r.push(p.target); r.push(Math.round((p.hours - avg) * 10) / 10, p.wk, p.hol);
       return r;
     });
     var total = ['Total'];
@@ -3847,11 +4193,12 @@ if (typeof module !== 'undefined') module.exports = RM;
     }
     var t0 = function (c) { var x = ctx.shifts[c]; return RM.fmtHM(x.start) + '–' + RM.fmtHM(x.start + x.len); };
     var notes = [];
-    notes.push('Morning ' + t0('M') + '.');
-    if (has('E')) notes.push('Evening ' + t0('E') + '.');
+    notes.push(SN('M') + ' ' + t0('M') + '.');
+    if (has('E')) notes.push(SN('E') + ' ' + t0('E') + '.');
     if (has('N')) notes.push('Night monitor ' + t0('N') + ', from home' + (ctx.rules.nbMode === 'always' ? '' : ' for female, office for male') + (ctx.rules.nbMode === 'none' && ctx.nW > 0 ? '. No night backup.' : '.'));
     if (has('NB')) notes.push('Night backup ' + t0('NB') + ', a male in the office all night.');
     if (has('EW')) notes.push('On a day a female takes the evening: Morning ' + (has('MW') ? t0('MW') : t0('M')) + ', Female evening ' + t0('EW') + ' (inside the female window ' + RM.fmtHM(ctx.ws) + '–' + RM.fmtHM(ctx.we) + '), Night monitor ' + t0('NW') + ' (home), Night backup ' + t0('NBW') + ' (office male). The morning after such a day is male only, ' + t0('MA') + '.');
+    if (anyOwed) notes.push('Week-offs owed, carried forward to next month: ' + an.per.map(function (p, i) { return p.carryOwed > 0 ? ctx.people[i].name + ' ' + p.carryOwed : ''; }).filter(Boolean).join(', ') + '. Upload the saved roster as next month\'s previous roster and they are given back from spare days.');
     notes.push('General ' + t0('G') + ' is the general day shift, used when the person is not on a monitoring shift.');
     return { dayH: ctx.dayH, cols: cols, rows: rows, total: total, avg: avg, notes: notes, working: ctx.workingDays, W: ctx.W };
   }
@@ -3872,7 +4219,7 @@ if (typeof module !== 'undefined') module.exports = RM;
   function holidayTable(ctx, cand) {
     var rows = holidayRows(ctx, cand), codes = dcodes(ctx);
     if (!rows.length) return h('div', { class: 'hint' }, 'No holidays fall inside this roster period.');
-    var head = ['Date', 'Holiday'].concat(codes.map(function (c) { return SHIFT_NAME[c]; })).concat(['Week-off']).concat(ctx.leaveN ? ['On leave'] : []);
+    var head = ['Date', 'Holiday'].concat(codes.map(function (c) { return SN(c); })).concat(['Week-off']).concat(ctx.leaveN ? ['On leave'] : []);
     return h('div', null,
       h('div', { class: 'hint', style: 'margin-bottom:8px' }, 'People are on shift on holidays as usual. This table shows who worked each one.'),
       h('div', { class: 'scroll' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, head.map(function (t) { return h('th', null, t); }))),
@@ -3886,7 +4233,7 @@ if (typeof module !== 'undefined') module.exports = RM;
   }
   function dailyTable(ctx, cand) {
     var codes = dcodes(ctx);
-    var head = ['Date', 'Holiday'].concat(codes.map(function (c) { var x = ctx.shifts[c]; return SHIFT_NAME[c] + ' ' + RM.fmtHM(x.start) + '–' + RM.fmtHM(x.start + x.len); })).concat(['Week-off']).concat(ctx.leaveN ? ['On leave'] : []);
+    var head = ['Date', 'Holiday'].concat(codes.map(function (c) { var x = ctx.shifts[c]; return SN(c) + ' ' + RM.fmtHM(x.start) + '–' + RM.fmtHM(x.start + x.len); })).concat(['Week-off']).concat(ctx.leaveN ? ['On leave'] : []);
     return h('div', { class: 'scroll' }, h('table', { class: 'tbl dly' }, h('thead', null, h('tr', null, head.map(function (t) { return h('th', null, t); }))),
       h('tbody', null, ctx.days.map(function (day, d) {
         var by = {}, off = [], lvn = [];
@@ -3913,7 +4260,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     var rows = [head];
     ctx.people.forEach(function (pp, p) {
       var a = an.per[p];
-      rows.push([pp.name, pp.tag].concat(cand.grid[p].map(function (x) { return x === 'LV' ? 'LEAVE' : x === 'OFF' || x === 'CL' ? 'OFF' : (RM.isHome(ctx, pp, x) ? 'N (home)' : dc(x)); })).concat([a.duty, a.hours, a.nights, a.hol, a.balance]));
+      rows.push([pp.name, pp.tag].concat(cand.grid[p].map(function (x) { return x === 'LV' ? 'LEAVE' : x === 'OFF' || x === 'CL' ? 'OFF' : (RM.isHome(ctx, pp, x) ? 'N (home)' : dd(x)); })).concat([a.duty, a.hours, a.nights, a.hol, a.balance]));
     });
     rows.push([]); rows.push(['Legend: M morning, E evening, N night, NB night backup, G general, OFF week-off, LEAVE planned leave. * marks a holiday. N (home) is a night worked from home.']);
     sheet('Roster', rows, [14, 6].concat(ctx.days.map(function () { return 10; })).concat([10, 8, 8, 14, 12]));
@@ -3923,7 +4270,7 @@ if (typeof module !== 'undefined') module.exports = RM;
         ctx.people.forEach(function (pp, p) {
           if (cand.grid[p][d] !== cd) return;
           var x = ctx.shifts[cd];
-          dr.push([day.iso, RM.DOW[day.dow], day.hol ? day.hol.name : '', pp.name, pp.tag, dc(cd), SHIFT_NAME[dc(cd)], RM.fmtHM(x.start), RM.fmtHM(x.start + x.len), x.len / 60, RM.isHome(ctx, pp, cd) ? 'home' : 'office', RM.overlapFor(ctx, cd)]);
+          dr.push([day.iso, RM.DOW[day.dow], day.hol ? day.hol.name : '', pp.name, pp.tag, dd(cd), SNb(cd), RM.fmtHM(x.start), RM.fmtHM(x.start + x.len), x.len / 60, RM.isHome(ctx, pp, cd) ? 'home' : 'office', RM.overlapFor(ctx, cd)]);
         });
       });
     });
@@ -3948,7 +4295,7 @@ if (typeof module !== 'undefined') module.exports = RM;
       });
       sheet('Leave Cover', lc, [12, 6, 16, 30, 24, 60]);
     }
-    var hr = [['Date', 'Day', 'Holiday', 'Mode'].concat(codes.map(function (cd) { return SHIFT_NAME[cd]; })).concat(['Week-off']).concat(ctx.leaveN ? ['On leave'] : [])];
+    var hr = [['Date', 'Day', 'Holiday', 'Mode'].concat(codes.map(function (cd) { return SN(cd); })).concat(['Week-off']).concat(ctx.leaveN ? ['On leave'] : [])];
     holidayRows(ctx, cand).forEach(function (r) { hr.push([r.day.iso, RM.DOW[r.day.dow], r.day.hol.name, RM.holidayModeLabel(ctx.inp.holidays.mode)].concat(codes.map(function (cd) { return r.by[cd].join(', '); })).concat([r.off.join(', ')]).concat(ctx.leaveN ? [r.lv.join(', ')] : [])); });
     if (hr.length === 1) hr.push(['No holidays in this period']);
     sheet('Holidays', hr, [12, 6, 26, 12, 20, 20, 20, 20, 20, 20]);
@@ -3957,18 +4304,37 @@ if (typeof module !== 'undefined') module.exports = RM;
     cand.soft.forEach(function (r) { ru.push(['Soft', r.id, r.name, r.pass ? 'Met' : 'Missed', r.detail]); });
     sheet('Rules', ru, [6, 6, 44, 8, 90]);
     var inRows = inputRows(ctx, seedLabel);
+    var ver = verOf(cand), hist = vsHistory();
+    if (ver) inRows.unshift(['Roster version', 'v' + ver]);
     sheet('Inputs', inRows, [28, 30]);
+    if (ver) {
+      var vr = [['Version', 'When', 'What changed']];
+      hist.slice().sort(function (a, b) { return cmpVer(a.v, b.v); }).forEach(function (x) { vr.push(['v' + x.v, x.at ? fmtAt(x.at) : '', x.note]); });
+      sheet('Versions', vr, [10, 18, 110]);
+      if (cand.changes && cand.changes.length) {
+        var chg = [['Date', 'Day', 'Person', 'Was', 'Now']];
+        cand.changes.slice().sort(function (a, b) { return a.d - b.d || a.q - b.q; }).forEach(function (c) { chg.push([ctx.days[c.d].iso, RM.DOW[ctx.days[c.d].dow], ctx.people[c.q].name, cellWord(ctx, c.from), cellWord(ctx, c.to)]); });
+        sheet('Changes in v' + ver, chg, [12, 6, 16, 30, 30]);
+      }
+    }
+    /* data sheets used when this Excel file is uploaded again to update the roster */
+    try {
+      var tmp = X.read(RM.toCSV(ctx, cand, ver || '1'), { type: 'string', raw: true });
+      X.utils.book_append_sheet(wb, tmp.Sheets[tmp.SheetNames[0]], 'Roster data');
+      var js = JSON.stringify({ rosterVersion: ver || '1', history: hist, inputs: ctx.inp, par: cand.par || undefined, tls: cand.tls || undefined });
+      if (js.length < 32000) sheet('Inputs (JSON)', [[js]], [60]);
+    } catch (er) { console.error(er); }
     return X.write(wb, { bookType: 'xlsx', type: 'array' });
   }
   function exportBlock(ctx, cand, rank, seedLabel) {
-    var base = 'roster_' + ctx.svc.label + '_' + ctx.days[0].iso + '_to_' + ctx.days[ctx.D - 1].iso + '_option' + rank;
+    var ver = verOf(cand), base = 'roster_' + ctx.svc.label + '_' + ctx.days[0].iso + '_to_' + ctx.days[ctx.D - 1].iso + (ver ? '_v' + ver : '_option' + rank), meta = { version: ver || '1', history: vsHistory() };
     var holder = h('div', { class: 'actions', style: 'flex-direction:column;align-items:stretch' });
     return h('div', null,
       h('div', { class: 'actions' },
         dlBtn('Download Excel (.xlsx)', base + '.xlsx', function () { return buildXlsx(ctx, cand, seedLabel); }, true),
-        dlBtn('Download CSV', base + '.csv', function () { return RM.toCSV(ctx, cand); }, true),
-        dlBtn("Download JSON (next month's previous roster)", base + '.json', function () { return RM.toJSON(ctx, cand, seedLabel); }, false)),
-      h('div', { class: 'actions', style: 'margin-top:8px' }, copyBtn('Copy CSV', function () { return RM.toCSV(ctx, cand); }, holder), copyBtn('Copy JSON', function () { return RM.toJSON(ctx, cand, seedLabel); }, holder)),
+        dlBtn('Download CSV', base + '.csv', function () { return RM.toCSV(ctx, cand, meta.version); }, true),
+        dlBtn("Download JSON (next month's previous roster)", base + '.json', function () { return RM.toJSON(ctx, cand, seedLabel, meta); }, false)),
+      h('div', { class: 'actions', style: 'margin-top:8px' }, copyBtn('Copy CSV', function () { return RM.toCSV(ctx, cand, meta.version); }, holder), copyBtn('Copy JSON', function () { return RM.toJSON(ctx, cand, seedLabel, meta); }, holder)),
       holder,
       h('div', { class: 'hint', style: 'margin-top:6px' }, 'You confirm the file name before it is saved to your computer. The Excel file has Roster, Daily Roster, Summary, Holidays, Rules and Inputs sheets' + (ctx.leaveN ? ' plus Leave Cover' : '') + '. Upload the CSV or JSON as the previous roster next month.'));
   }
@@ -4008,6 +4374,53 @@ if (typeof module !== 'undefined') module.exports = RM;
     document.removeEventListener('keydown', escClose);
   }
   function escClose(e) { if (e.key === 'Escape') closeOverlay(); }
+
+  /* ---------- update a running roster: upload CSV / JSON ---------- */
+  function openUpdateFlow() {
+    closeOverlay();
+    var status = h('div', { class: 'slout' }), file = h('input', { type: 'file', id: 'upd-file', accept: '.csv,.json,.xlsx,text/csv,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    var close = h('button', { class: 'btn ghost small', type: 'button' }, 'Close'); close.addEventListener('click', closeOverlay);
+    function load(f) {
+      if (!f) return;
+      var rd = new FileReader();
+      rd.onerror = function () { fill(status, h('div', { class: 'note warn' }, 'The file could not be read. Try again.')); };
+      var isX = /\.xlsx?$/i.test(f.name);
+      rd.onload = function () {
+        var r, txt = '', extra = null;
+        try {
+          if (isX) {
+            if (!window.XLSX) throw new Error('the Excel reader did not load, use CSV or JSON');
+            var wb = window.XLSX.read(rd.result, { type: 'array' });
+            if (!wb.Sheets['Roster data']) throw new Error('this Excel file has no "Roster data" sheet. Use an Excel file saved from this tool (v1 or later), or upload the CSV/JSON');
+            txt = window.XLSX.utils.sheet_to_csv(wb.Sheets['Roster data']);
+            if (wb.Sheets['Inputs (JSON)']) { try { extra = JSON.parse(String(wb.Sheets['Inputs (JSON)'].A1.v)); } catch (e1) { extra = null; } }
+          } else txt = String(rd.result);
+          r = RM.rosterFromFile(txt, f.name, engineInput(), extra);
+        } catch (e) { r = { errors: ['The file could not be understood (' + (e && e.message) + ').'], warnings: [] }; console.error(e); }
+        if (r.errors && r.errors.length) { fill(status, h('div', { class: 'note warn' }, h('b', null, 'This file cannot be used. '), r.errors.slice(0, 4).map(function (m) { return h('div', null, m); }))); return; }
+        S.uploaded = true; S.openSudden = true; if (r.warnings.length) r.cand.note = r.warnings.join(' ');
+        vsStart(r.ctx, r.cand, 1, 'uploaded', r.version, r.history, 'Uploaded from ' + f.name);
+        var go = h('button', { class: 'btn', type: 'button' }, 'Open roster v' + r.version);
+        go.addEventListener('click', function () { openRoster(r.ctx, r.cand, 1, 'uploaded', true); });
+        fill(status,
+          h('div', { class: 'ok-line' }, 'Roster read: ' + r.ctx.svc.label + (r.ctx.svc.pair ? ' (' + RM.PAIR_LABEL[r.ctx.svc.pair] + ')' : '') + ', ' + RM.prettyDate(r.ctx.days[0].iso) + ' to ' + RM.prettyDate(r.ctx.days[r.ctx.D - 1].iso) + ', ' + r.ctx.P + ' people, version v' + r.version + '.'),
+          r.warnings.map(function (m) { return h('div', { class: 'note warn', style: 'margin-top:8px' }, m); }),
+          h('div', { class: 'actions' }, go));
+        openRoster(r.ctx, r.cand, 1, 'uploaded', true);
+      };
+      if (isX) rd.readAsArrayBuffer(f); else rd.readAsText(f);
+    }
+    file.addEventListener('change', function () { load(file.files && file.files[0]); });
+    var ov = h('div', { class: 'ov', id: 'rosterOverlay', role: 'dialog', 'aria-label': 'Update a running roster' },
+      h('div', { class: 'ovbar' }, h('div', { class: 'ovt' }, h('b', null, 'Update a running roster')), h('div', { class: 'row' }, close)),
+      h('div', { class: 'ovbody' }, h('section', { class: 'card' },
+        h('div', { class: 'big', style: 'font-weight:600' }, 'Upload the roster that is being followed'),
+        h('p', { class: 'hint' }, 'Use the Excel, CSV or JSON you saved from this tool. Excel and JSON carry all the inputs, so they are the most exact. Then mark who is on leave and from which date. Days already followed stay as they are, and the rest is re-planned with as few changes as possible. Each change becomes a new version (v1, v1.1, v1.2).'),
+        field('Roster file (.xlsx, .csv or .json)', file), status)));
+    document.body.append(ov);
+    try { document.body.style.overflow = 'hidden'; } catch (e) { /* ignore */ }
+    document.addEventListener('keydown', escClose);
+  }
   var isFinalGlobal = false;
   function openRoster(ctx, cand, rank, seedLabel, isFinal) {
     closeOverlay();
@@ -4017,11 +4430,11 @@ if (typeof module !== 'undefined') module.exports = RM;
     var printBtn = h('button', { class: 'btn ghost small', type: 'button' }, 'Print');
     printBtn.addEventListener('click', function () { try { window.print(); } catch (e) { /* ignore */ } });
     var bar = h('div', { class: 'ovbar' },
-      h('div', { class: 'ovt' }, h('b', null, (isFinal || isSel ? 'Final roster: option #' : 'Roster option #') + rank), h('span', { class: 'score' }, 'Fairness ' + cand.an.score), h('span', { class: 'hint' }, ctx.svc.label + ' · ' + RM.prettyDate(ctx.days[0].iso) + ' to ' + RM.prettyDate(ctx.days[ctx.D - 1].iso))),
-      h('div', { class: 'row' }, isFinal || isSel ? null : selectBtn(ctx, cand, rank, seedLabel), printBtn, closeBtn));
+      h('div', { class: 'ovt' }, h('b', null, verOf(cand) ? 'Roster v' + verOf(cand) : (isFinal || isSel ? 'Final roster: option #' : 'Roster option #') + rank), h('span', { class: 'score' }, 'Fairness ' + cand.an.score), h('span', { class: 'hint' }, ctx.svc.label + ' · ' + RM.prettyDate(ctx.days[0].iso) + ' to ' + RM.prettyDate(ctx.days[ctx.D - 1].iso))),
+      h('div', { class: 'row' }, isFinal || isSel || verOf(cand) ? null : selectBtn(ctx, cand, rank, seedLabel), printBtn, closeBtn));
     isFinalGlobal = isFinal || isSel;
     var body = h('div', { class: 'ovbody' },
-      isFinal || isSel ? h('div', { class: 'rhead final', style: 'margin-bottom:16px' }, h('h2', null, 'Final roster: option #' + rank), h('p', null, 'Everything in the Excel file is shown below. Save it to your computer from here.'), h('div', { style: 'margin-top:12px' }, exportBlock(ctx, cand, rank, seedLabel))) : null,
+      isFinal || isSel ? h('div', { class: 'rhead final', style: 'margin-bottom:16px' }, h('h2', null, verOf(cand) ? 'Roster v' + verOf(cand) + (cand.note ? '' : '') : 'Final roster: option #' + rank), h('p', null, 'Everything in the Excel file is shown below. Save it to your computer from here.'), h('div', { style: 'margin-top:12px' }, exportBlock(ctx, cand, rank, seedLabel))) : null,
       detailView(ctx, cand, rank, seedLabel));
     var ov = h('div', { class: 'ov', id: 'rosterOverlay', role: 'dialog', 'aria-label': 'Roster option ' + rank }, bar, body);
     document.body.append(ov);
@@ -4030,7 +4443,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     ov.scrollTop = 0;
   }
   function selectFinal(ctx, cand, rank, seedLabel) {
-    S.final = { rank: rank };
+    S.final = { rank: rank }; S.uploaded = false; vsStart(ctx, cand, rank, seedLabel, '1', [], 'First roster (option #' + rank + ')');
     var old = $('#finalBox');
     var openBtn = h('button', { class: 'btn small', type: 'button' }, 'Open final roster');
     openBtn.addEventListener('click', function () { openRoster(ctx, cand, rank, seedLabel, true); });
@@ -4133,7 +4546,11 @@ if (typeof module !== 'undefined') module.exports = RM;
       else msgs.push('The rest, night and week-off rules together leave no valid pattern for this team. Try fewer week-offs, a different male and female split, or a longer limit for nights in a row.');
       if (ctx.nW > 0 && !Object.keys(ctx.shifts).some(function (c) { return c !== 'N' && c !== 'NB' && ctx.womanCan[c]; })) msgs.unshift('No office shift fits the female window (' + S.inp.women.start + ' to ' + S.inp.women.end + '). With the first service start at ' + S.inp.prev.firstStart + ' the shifts are ' + ['M', 'E', 'N'].filter(function (c) { return ctx.shifts[c]; }).map(function (c) { return c + ' ' + RM.fmtHM(ctx.shifts[c].start) + '–' + RM.fmtHM(ctx.shifts[c].start + ctx.shifts[c].len); }).join(', ') + ', so female can only work nights from home. Widen the female window (Edit "Female shift window" shows one-click suggestions) or change the first service start.');
       if (ctx.fixedOf && ctx.fixedOf.some(Boolean)) msgs.push('Fixed shifts: ' + ctx.fixedOf.map(function (c, i) { return c ? ctx.people[i].name + ' on ' + c : ''; }).filter(Boolean).join(', ') + '. A fixed shift leaves fewer people to cover the other shifts and the week-offs. Try removing one, choosing a different shift, or adding a person.');
-      if (ctx.forceCnt && ctx.forceCnt.some(function (n) { return n > 0; })) msgs.push('Planned week-offs are kept exactly. If several people ask for the same day there may be nobody left to cover it. Move one of them to another day.');
+      if (ctx.forceCnt && ctx.forceCnt.some(function (n) { return n > 0; })) {
+        var tight = ctx.people.filter(function (pp, i) { return ctx.forceCnt[i] > 0; }).map(function (pp) { return pp.name; }).join(', ');
+        msgs.unshift('Planned week-offs (' + tight + ') are kept exactly, so that person has fewer free week-offs left for the other days. With "Max working days in a row" = ' + ctx.rules.maxWork + ' this is too tight for a team of ' + ctx.P + '. Raise "Max working days in a row" (up to 10), or shorten the planned week-off, or add a person.');
+        msgs.push('If several people ask for the same day there may also be nobody left to cover it. Move one of them to another day.');
+      }
       if (ctx.leaveN) { RM.leaveCheck(ctx).forEach(function (m) { msgs.unshift(m.msg); }); msgs.push('Planned leave takes people off duty, so the rest must cover every shift with no spare day. A shorter leave, fewer week-offs or one more person usually fixes this. You can also move the leave to a lighter part of the month.'); }
       if (ctx.P < T.N) msgs.push('Your team of ' + ctx.P + ' is below the suggested ' + T.N + ', which makes this likely.');
       box.append(h('div', { class: 'rhead' }, h('h2', null, 'No valid roster found'), h('p', null, search.tried + ' combinations tried, none passed all 12 hard rules, so I will not show a roster that breaks one.'), h('ul', { class: 'why' }, msgs.map(function (m) { return h('li', { class: 'warn' }, m); }))));
@@ -4148,7 +4565,7 @@ if (typeof module !== 'undefined') module.exports = RM;
       h('p', null, search.tried + ' combinations tried · ' + fin.unique + ' distinct rosters built · ' + fin.valid + ' checked and passed all 12 hard rules · ranked by fairness · seed ' + seedLabel),
       h('div', { class: 'note warn', id: 'staleNote', hidden: true, style: 'margin-top:10px' }, 'You changed an input after this was built. Generate again to refresh.'),
       legend(ctx),
-      null);
+      S.mwAuto ? h('div', { class: 'note', id: 'mwNote', style: 'margin-top:10px' }, 'Max working days in a row was raised from ' + S.inp.rules.maxWork + ' to ' + S.mwAuto + ' for this roster, because your week-offs and the team size need it. This is the smallest value that works. The fairness score already penalises long streaks.') : null);
     if (S.emerg) {
       var mr = 0, mn = 0;
       best.grid.forEach(function (row) { var r = 0, n = 0; row.forEach(function (c) { if (c === 'OFF' || c === 'CL' || c === 'LV') r = 0; else { r++; mr = Math.max(mr, r); } var bc = RM.baseCode(c); if (bc === 'N' || bc === 'NB') { n++; mn = Math.max(mn, n); } else n = 0; }); });
@@ -4234,7 +4651,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     var go = h('button', { class: 'btn big', type: 'button' }, 'Create my roster');
     go.addEventListener('click', function () {
       if (S.running) return;
-      S.inp.service.svc = q.svc; S.inp.service.n = q.n; S.inp.period.start = q.range[0]; S.inp.period.end = q.range[1];
+      S.inp.service.svc = q.svc; S.inp.service.pair = 'ME'; S.inp.service.n = q.n; S.inp.period.start = q.range[0]; S.inp.period.end = q.range[1];
       S.inp.team.men = q.men; S.inp.team.women = q.women; S.inp.team.menNames = []; S.inp.team.womenNames = []; S.inp.team.touched = true;
       S.inp.weekoffs.perPerson = defaultWeekoffs();
       if (q.women > 0) { S.inp.women.start = '07:00'; S.inp.women.end = '21:00'; }
@@ -4245,6 +4662,8 @@ if (typeof module !== 'undefined') module.exports = RM;
     });
     var step = h('button', { class: 'link', type: 'button' }, 'I want to set holidays, leave and rules first');
     step.addEventListener('click', function () { clearWidget(); userSays('Set it up step by step'); ask('service'); });
+    var upd = h('button', { class: 'link', type: 'button', id: 'updRoster' }, 'I already have a roster, update it for a leave');
+    upd.addEventListener('click', function () { openUpdateFlow(); });
     paint();
     return h('section', { class: 'card qs', 'aria-label': 'Quick start' },
       h('div', { class: 'qh' }, h('b', null, 'Quick start'), h('span', null, 'Four answers, then your roster. Everything else uses the standard rules.')),
@@ -4253,7 +4672,7 @@ if (typeof module !== 'undefined') module.exports = RM;
         field('2. Month', mChips.el),
         field('3. Male in the team', men.el), field('4. Female in the team', women.el)),
       info,
-      h('div', { class: 'actions' }, go, step));
+      h('div', { class: 'actions' }, go, step, upd));
   }
 
   /* ---------- start ---------- */
