@@ -133,6 +133,11 @@ input[type=number] { font-family: var(--mono); }
 .errs li b { font-weight: 600; }
 .drop { border: 1.5px dashed var(--line); border-radius: 12px; padding: 18px; text-align: center; background: var(--surface2); color: var(--muted); }
 .drop.over { border-color: var(--focus); background: var(--surface); }
+.drop { cursor: pointer; transition: border-color .15s, background .15s; }
+.drop:hover, .drop:focus-within { border-color: var(--focus); background: var(--surface); }
+.drop .dropbtn { background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; font-weight: 600; font-size: 14px; }
+.drop:hover .dropbtn { background: #14181D; color: #F2B84B; border-color: #14181D; }
+.drop .dropbtn { display: inline-block; margin: 8px 0 6px; }
 .drop b { color: var(--ink); }
 .files { display: flex; flex-direction: column; gap: 8px; }
 .file { border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; display: flex; flex-direction: column; gap: 6px; background: var(--surface); }
@@ -470,6 +475,27 @@ a,.link{text-decoration-color:var(--yel)}
 .chip[aria-pressed="true"]{color:var(--btnText)}
 .brand h1{font-weight:800;letter-spacing:-.02em}
 </style>
+<style id="shiftcss">
+:root{--c-A:#4FB39A;--t-A:#06241C}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--c-A:#3E9A84;--t-A:#04170F}}
+:root[data-theme="dark"]{--c-A:#3E9A84;--t-A:#04170F}
+.c-A{background:var(--c-A);color:var(--t-A)}
+:root{--c-R:#7BA7D9;--t-R:#0B2036;--c-L:#C77DA0;--t-L:#2E0A1A}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--c-R:#6A93C4;--t-R:#071522;--c-L:#B06C8E;--t-L:#1F0710}}
+:root[data-theme="dark"]{--c-R:#6A93C4;--t-R:#071522;--c-L:#B06C8E;--t-L:#1F0710}
+.c-R{background:var(--c-R);color:var(--t-R)}.c-L{background:var(--c-L);color:var(--t-L)}
+.shrow{border:1px solid var(--line);border-radius:10px;padding:12px;margin:10px 0;background:var(--surface)}
+.shhead{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.shtime{color:var(--muted);font-size:13px;font-family:var(--mono)}
+.shtotal{margin:8px 0 14px}
+.shnote{margin-top:8px}
+.note.bad{background:#fde7e4;color:#8a1c12;border:1px solid #f1b9b1}
+.curchk{margin:10px 0}
+.addrow{display:flex;flex-direction:column;align-items:flex-start;gap:6px;margin:6px 0 10px}.addrow .hint{margin:0;max-width:60ch}
+tr.grp.g-plain td{background:var(--surface2);font-weight:700}
+.chip[aria-pressed="true"]:hover{background:var(--brand);border-color:var(--brand);color:var(--btnText);transform:none}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+</style>
 <div class="wrap landing" id="wrap">
   <section id="welcome" aria-label="Welcome">
     <div class="wtag">Support shift planner</div>
@@ -485,7 +511,7 @@ a,.link{text-decoration-color:var(--yel)}
       <div class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4M8 14h2.5M13.5 14H16M8 17.2h2.5"/></svg></div>
       <div><h1>Mr. Roster</h1><p>Answer a few questions and get fair, rule-checked rosters. Every answer is saved on the right and stays editable.</p></div>
     </div>
-    <div class="prog"><span id="progTxt">0 of 8 saved</span><span class="bar"><i id="progBar"></i></span><button class="btn ghost small" id="restart" type="button">Start over</button></div>
+    <div class="prog"><span id="progTxt">0 of 8 saved</span><span class="bar"><i id="progBar"></i></span><button class="btn ghost small" id="updRoster" type="button" title="Already have a roster? Upload it and update it for a leave">Update an existing roster</button><button class="btn ghost small" id="restart" type="button">Start over</button></div>
   </header>
   <nav class="stepnav" id="stepNav" aria-label="Progress"></nav>
   <div class="layout">
@@ -554,24 +580,77 @@ var RM = (function () {
 
   /* ---------- service and team size ---------- */
   var SERVICES = ['8x5', '8x6', '8x7', '16x5', '16x6', '16x7', '24x7'];
-  function parseService(s, pair) {
+  /* custom shift layout: 1 to 4 shifts in time order, each with a label (Morning, Afternoon, Evening, Night) and its hours.
+     The hours must add up to the service hours. Shifts are laid back to back from the first start time; the handover overlap
+     is added to every shift after the first (and after the last, in a 24 hour service, so the next day's first shift is covered). */
+  var LAYOUT_LABELS = ['R', 'M', 'A', 'E', 'L', 'N'], LABEL_NAME = { R: 'Early morning', M: 'Morning', A: 'Afternoon', E: 'Evening', L: 'Late evening', N: 'Night' };
+  function normLayout(H, rows) {
+    var out = { rows: null, err: '' };
+    if (!Array.isArray(rows) || !rows.length) return out;
+    var k = rows.length, seen = {}, list = [], i;
+    if (k > 5) { out.err = 'A service can have at most 5 shifts.'; return out; }
+    if (rows.filter(function (r) { return String(r && r.label || '').toUpperCase() !== 'N'; }).length > 4) { out.err = 'Without a night shift a service can have at most 4 shifts.'; return out; }
+    if (H === 24 && k < 3) { out.err = 'A 24-hour service needs 3 to 5 shifts. Night duty is 8 to 11 hours, so two shifts cannot cover the day.'; return out; }
+    for (i = 0; i < k; i++) {
+      var lb = String(rows[i] && rows[i].label || '').toUpperCase(), hr = Number(rows[i] && rows[i].hours);
+      if (LAYOUT_LABELS.indexOf(lb) < 0) { out.err = 'Shift ' + (i + 1) + ': pick Morning, Afternoon, Evening or Night.'; return out; }
+      if (seen[lb]) { out.err = LABEL_NAME[lb] + ' is chosen twice. Each shift can be used once.'; return out; }
+      if (!(hr > 0)) { out.err = 'Shift ' + (i + 1) + ': enter the hours (more than 0).'; return out; }
+      seen[lb] = 1; list.push({ label: lb, hours: Math.round(hr * 100) / 100 });
+    }
+    if (H === 24) {
+      if (list[k - 1].label !== 'N') { out.err = 'In a 24-hour service the last shift must be the night shift.'; return out; }
+      for (i = 0; i < k - 1; i++) if (list[i].label === 'N') { out.err = 'In a 24-hour service only the last shift can be the night shift.'; return out; }
+      ['M', 'E', 'X', 'Y'].slice(0, k - 1).forEach(function (c, ix) { list[ix].code = c; }); list[k - 1].code = 'N';
+    } else {
+      var pl = ['M', 'E', 'X', 'Y'], pi = 0;
+      list.forEach(function (r) { r.code = r.label === 'N' ? 'N' : pl[pi++]; });
+    }
+    out.rows = list; return out;
+  }
+  function parseService(s, pair, layout) {
     var m = /^(8|16|24)x([567])$/.exec(s || '');
     if (!m) return null;
     var H = +m[1];
-    return { H: H, dpw: +m[2], label: s, pair: H === 16 ? (PAIR16.indexOf(pair) >= 0 ? pair : 'ME') : H === 8 ? (PAIR8.indexOf(pair) >= 0 ? pair : 'M') : null };
+    var svc = { H: H, dpw: +m[2], label: s, pair: H === 16 ? (PAIR16.indexOf(pair) >= 0 ? pair : 'ME') : H === 8 ? (PAIR8.indexOf(pair) >= 0 ? pair : 'M') : null };
+    if (Array.isArray(layout) && layout.length) { var nl = normLayout(H, layout); svc.layout = nl.rows; svc.layoutErr = nl.err; svc.layoutIn = layout; }
+    return svc;
+  }
+  /* the layouts the old pair choices already cover run the proven default path */
+  function legacyOf(H, rows) {
+    var ok = Array.isArray(rows) && rows.length, i;
+    if (!ok) return null;
+    var lb = rows.map(function (r) { return String(r.label).toUpperCase(); }), hr = rows.map(function (r) { return Number(r.hours); });
+    if (H === 24) return (lb.join('') === 'MEN' && hr.every(function (x) { return x === 8; })) ? { pair: null } : null;
+    if (lb.indexOf('N') >= 0 && H !== 24) return null;
+    if (H === 16) { var pk = lb.join(''); var pm = { ME: 'ME', EN: 'EN', NM: 'NM' }; return (pm[pk] && hr.length === 2 && hr[0] === 8 && hr[1] === 8) ? { pair: pm[pk] } : null; }
+    if (H === 8) return (lb.length === 1 && PAIR8.indexOf(lb[0]) >= 0 && hr[0] === 8) ? { pair: lb[0] } : null;
+    return null;
+  }
+  function defaultLayout(H, pair) {
+    if (H === 24) return [{ label: 'M', hours: 8 }, { label: 'E', hours: 8 }, { label: 'N', hours: 8 }];
+    if (H === 16) return (PAIRS[pair] && PAIR16.indexOf(pair) >= 0 ? [PAIRS[pair].M, PAIRS[pair].E] : ['M', 'E']).map(function (l) { return { label: l, hours: 8 }; });
+    return [{ label: PAIR8.indexOf(pair) >= 0 ? pair : 'M', hours: 8 }];
   }
   /* a 16 hour service has two shifts. The engine keeps them as slot M (first) and slot E (second);
      the pair says which real shifts they are: ME = Morning+Evening, EN = Evening+Night, NM = Night+Morning */
   var PAIRS = { ME: { M: 'M', E: 'E' }, EN: { M: 'E', E: 'N' }, NM: { M: 'N', E: 'M' }, M: { M: 'M' }, E: { M: 'E' }, N: { M: 'N' } };
   var PAIR16 = ['ME', 'EN', 'NM'], PAIR8 = ['M', 'E', 'N'];
   var PAIR_LABEL = { ME: 'Morning + Evening', EN: 'Evening + Night', NM: 'Night + Morning', M: 'Morning', E: 'Evening', N: 'Night' };
-  var CUR_H = 0, CUR_PAIR = 'ME', NIGHT_SLOT = null;
+  var CUR_H = 0, CUR_PAIR = 'ME', NIGHT_SET = [], CUR_MAP = null;
   function setPair(svc) {
-    CUR_H = svc ? svc.H : 0; CUR_PAIR = svc && (svc.H === 16 || svc.H === 8) && PAIRS[svc.pair] ? svc.pair : (CUR_H === 8 ? 'M' : 'ME');
-    NIGHT_SLOT = CUR_H === 16 ? (CUR_PAIR === 'EN' ? 'E' : CUR_PAIR === 'NM' ? 'M' : null) : CUR_H === 8 ? (CUR_PAIR === 'N' ? 'M' : null) : null;
+    CUR_H = svc ? svc.H : 0; CUR_MAP = null; NIGHT_SET = [];
+    if (svc && svc.layout && svc.layout.length) {
+      CUR_MAP = {};
+      svc.layout.forEach(function (r) { CUR_MAP[r.code] = r.label; if (r.label === 'N' && r.code !== 'N') NIGHT_SET.push(r.code); });
+      return;
+    }
+    CUR_PAIR = svc && (svc.H === 16 || svc.H === 8) && PAIRS[svc.pair] ? svc.pair : (CUR_H === 8 ? 'M' : 'ME');
+    var ns = CUR_H === 16 ? (CUR_PAIR === 'EN' ? 'E' : CUR_PAIR === 'NM' ? 'M' : null) : CUR_H === 8 ? (CUR_PAIR === 'N' ? 'M' : null) : null;
+    NIGHT_SET = ns === null ? [] : [ns];
   }
-  function outCode(c) { if ((CUR_H === 16 || CUR_H === 8) && PAIRS[CUR_PAIR][c]) return PAIRS[CUR_PAIR][c]; return c; }
-  function inCode(l) { if (CUR_H === 16 || CUR_H === 8) { var m = PAIRS[CUR_PAIR]; for (var k in m) if (m[k] === l) return k; } return l; }
+  function outCode(c) { if (CUR_MAP) return CUR_MAP[c] || c; if ((CUR_H === 16 || CUR_H === 8) && PAIRS[CUR_PAIR][c]) return PAIRS[CUR_PAIR][c]; return c; }
+  function inCode(l) { if (CUR_MAP) { for (var k0 in CUR_MAP) if (CUR_MAP[k0] === l) return k0; return l; } if (CUR_H === 16 || CUR_H === 8) { var m = PAIRS[CUR_PAIR]; for (var k in m) if (m[k] === l) return k; } return l; }
   function isOpenDow(svc, dow) {
     if (svc.dpw === 7) return true;
     if (svc.dpw === 6) return dow !== 0;
@@ -581,12 +660,13 @@ var RM = (function () {
   function nByOf(service) {
     var n = service && service.n, by = (service && service.by) || {};
     function pick(c) { var v = by[c]; return Number.isInteger(v) && v >= 1 ? v : n; }
-    return { M: pick('M'), E: pick('E'), N: pick('N') };
+    return { M: pick('M'), E: pick('E'), N: pick('N'), X: pick('X'), Y: pick('Y') };
   }
   function teamSize(svc, nArg) {
     var k = svc.H / 8;
-    var nb = typeof nArg === 'object' && nArg ? nArg : { M: nArg, E: nArg, N: nArg };
+    var nb = typeof nArg === 'object' && nArg ? nArg : { M: nArg, E: nArg, N: nArg, X: nArg, Y: nArg };
     var perDay = nb.M + (svc.H >= 16 ? nb.E : 0) + (svc.H === 24 ? nb.N : 0), n = nb.M;
+    if (svc.layout) { perDay = 0; svc.layout.forEach(function (r) { perDay += nb[r.code] || nb.M; }); k = svc.layout.length; }
     var shifts = perDay * svc.dpw;
     var N = Math.floor(shifts / 5) + 1;
     if (N < 2) N = 2;
@@ -609,14 +689,23 @@ var RM = (function () {
   var SHIFT_INFO = {
     M: 'Morning', E: 'Evening', EW: 'Evening (female window)', N: 'Night', NB: 'Night backup', NBW: 'Night backup (early start)', NW: 'Night (early start)', MW: 'Morning (short)', MA: 'Morning (early, after a female evening)', G: 'General / TL'
   };
-  function defaultFirstStart(svc) { if (svc.H === 8) return svc.pair === 'E' ? 15 * 60 : svc.pair === 'N' ? 22 * 60 : 9 * 60; if (svc.H === 16) return svc.pair === 'EN' ? 14 * 60 + 30 : svc.pair === 'NM' ? 22 * 60 : 7 * 60; return 7 * 60; }
-  function buildShifts(svc, S, edits) {
+  function defaultFirstStart(svc) { if (svc.layout) { var l0 = svc.layout[0].label; return l0 === 'N' ? 22 * 60 : l0 === 'A' ? 12 * 60 : l0 === 'R' ? 5 * 60 : l0 === 'L' ? 17 * 60 : l0 === 'E' ? (svc.H === 8 ? 15 * 60 : 14 * 60 + 30) : (svc.H === 8 ? 9 * 60 : 7 * 60); } if (svc.H === 8) return svc.pair === 'E' ? 15 * 60 : svc.pair === 'N' ? 22 * 60 : 9 * 60; if (svc.H === 16) return svc.pair === 'EN' ? 14 * 60 + 30 : svc.pair === 'NM' ? 22 * 60 : 7 * 60; return 7 * 60; }
+  function buildShifts(svc, S, edits, ovl) {
     var sh = {};
+    if (svc.layout) {
+      var ov = ovl || 30, cum = 0, kk = svc.layout.length;
+      svc.layout.forEach(function (r, i) {
+        sh[r.code] = { code: r.code, start: S + Math.round(cum * 60) - (i > 0 ? ov : 0), len: Math.round(r.hours * 60) + (i > 0 ? ov : 0) + (i === kk - 1 && svc.H === 24 ? ov : 0) };
+        cum += r.hours;
+      });
+      if (sh.N) sh.NB = { code: 'NB', start: sh.N.start, len: sh.N.len };
+    } else {
     sh.M = { code: 'M', start: S, len: 480 };
     if (svc.H >= 16) sh.E = { code: 'E', start: S + 450, len: svc.H === 16 ? 510 : 480 };
     if (svc.H === 24) {
       sh.N = { code: 'N', start: S + 900, len: 600 };
       sh.NB = { code: 'NB', start: S + 900, len: 600 };
+    }
     }
     sh.G = { code: 'G', start: svc.H === 8 ? S : S + 150, len: svc.H === 8 ? 480 : 510 };
     if (edits) {
@@ -630,7 +719,9 @@ var RM = (function () {
     }
     return sh;
   }
-  function monitorCodes(svc) { return svc.H === 8 ? ['M'] : svc.H === 16 ? ['M', 'E'] : ['M', 'E', 'N']; }
+  function hasNight(svc) { return !!(svc && (svc.layout ? svc.layout.some(function (r) { return r.label === 'N'; }) : svc.H === 24)); }
+  function nightOnly(svc) { return !!(svc && svc.layout && svc.layout.every(function (r) { return r.label === 'N'; })); }
+  function monitorCodes(svc) { if (svc.layout) return svc.layout.map(function (r) { return r.code; }); return svc.H === 8 ? ['M'] : svc.H === 16 ? ['M', 'E'] : ['M', 'E', 'N']; }
 
   var DEFAULT_RULES = {
     minRestH: 10, maxNights: 5, maxWork: 5, maxOffRun: 2, maxDutyH: 10, overlapMin: 30,
@@ -640,12 +731,22 @@ var RM = (function () {
   /* ---------- input validation (all errors together) ---------- */
   function validateInputs(inp) {
     var errs = [];
-    var svc = parseService(inp.service && inp.service.svc, inp.service && inp.service.pair); setPair(svc);
+    var svc = parseService(inp.service && inp.service.svc, inp.service && inp.service.pair, inp.service && inp.service.layout); setPair(svc);
     if (!svc) errs.push({ step: 'service', field: 'Service hours', msg: 'Service hours "' + (inp.service && inp.service.svc || '') + '" is not supported. Allowed: ' + SERVICES.join(', ') + '.' });
     var n = inp.service && inp.service.n;
     if (!(Number.isInteger(n) && n >= 1)) errs.push({ step: 'service', field: 'Resources per shift (n)', msg: 'n = ' + n + ' is not valid. Use a whole number of 1 or more.' });
     var byIn = (inp.service && inp.service.by) || {};
-    ['M', 'E', 'N'].forEach(function (c) { var v = byIn[c]; if (v !== undefined && v !== null && !(Number.isInteger(v) && v >= 1)) errs.push({ step: 'service', field: 'People on ' + (c === 'M' ? 'morning' : c === 'E' ? 'evening' : 'night') + ' shift', msg: 'The number of people on this shift (' + v + ') is not valid. Use a whole number of 1 or more.' }); });
+    ['M', 'E', 'N', 'X', 'Y'].forEach(function (c) { var v = byIn[c]; if (v !== undefined && v !== null && !(Number.isInteger(v) && v >= 1)) errs.push({ step: 'service', field: 'People on ' + (svc && svc.layout ? LABEL_NAME[outCode(c)] || c : c === 'M' ? 'morning' : c === 'E' ? 'evening' : 'night').toLowerCase() + ' shift', msg: 'The number of people on this shift (' + v + ') is not valid. Use a whole number of 1 or more.' }); });
+    if (svc && inp.service && Array.isArray(inp.service.layout) && inp.service.layout.length) {
+      if (svc.layoutErr) errs.push({ step: 'service', field: 'Shifts', msg: svc.layoutErr });
+      else if (svc.layout) {
+        var tot = 0; svc.layout.forEach(function (r) { tot += r.hours; });
+        if (Math.abs(tot - svc.H) > 0.001) errs.push({ step: 'service', field: 'Shift hours', msg: 'The shifts add up to ' + (Math.round(tot * 100) / 100) + ' h but the service runs ' + svc.H + ' h a day. Change the hours so they add up to ' + svc.H + '.' });
+        svc.layout.forEach(function (r) { if (r.label === 'N' && (r.hours < 8 || r.hours > 11)) errs.push({ step: 'service', field: 'Night shift hours', msg: 'The night shift must be 8 to 11 hours. Yours is ' + r.hours + ' h.' }); });
+        var shL = buildShifts(svc, 0, null), longest = 0; Object.keys(shL).forEach(function (c) { if (c !== 'G') longest = Math.max(longest, shL[c].len); });
+        if (longest > 12 * 60) errs.push({ step: 'service', field: 'Shift hours', msg: 'The longest shift would be ' + (longest / 60) + ' h with the handover overlap, above the 12 h limit. Use shorter shifts.' });
+      }
+    }
     var s = dateFromISO(inp.period && inp.period.start), e = dateFromISO(inp.period && inp.period.end);
     if (!s) errs.push({ step: 'period', field: 'Start date', msg: 'Start date "' + (inp.period && inp.period.start || '') + '" is not a valid date.' });
     if (!e) errs.push({ step: 'period', field: 'End date', msg: 'End date "' + (inp.period && inp.period.end || '') + '" is not a valid date.' });
@@ -659,7 +760,7 @@ var RM = (function () {
     if (Number.isInteger(men) && Number.isInteger(women)) {
       var total = men + women;
       if (total < 2) errs.push({ step: 'team', field: 'Team size', msg: 'Team size ' + total + ' is below the minimum of 2.' });
-      if (svc && svc.H === 24 && men === 0) errs.push({ step: 'team', field: 'Male', msg: '24x7 needs at least one male for the office post at night. Male = 0 is not allowed.' });
+      if (svc && (svc.H === 24 || hasNight(svc)) && men === 0) errs.push({ step: 'team', field: 'Male', msg: (svc.H === 24 ? '24x7' : 'A service with a night shift') + ' needs at least one male for the office post at night. Male = 0 is not allowed.' });
       if (t.headcount !== null && t.headcount !== undefined && t.headcount !== '' && Number(t.headcount) !== total)
         errs.push({ step: 'team', field: 'Client headcount', msg: 'Headcount ' + t.headcount + ' does not match male + female = ' + total + '. Change one of them.' });
     }
@@ -667,7 +768,7 @@ var RM = (function () {
     if (!(Number.isInteger(w) && w >= 0)) errs.push({ step: 'weekoffs', field: 'Week-offs per person', msg: 'Week-offs = ' + w + ' is not valid. Use 0 or more.' });
     if (s && e && e >= s && Number.isInteger(w) && w > daysBetween(s, e) + 1) errs.push({ step: 'weekoffs', field: 'Week-offs per person', msg: 'Week-offs (' + w + ') are more than the days in the period (' + (daysBetween(s, e) + 1) + ').' });
     var wn = inp.women || {};
-    if (t.women > 0) {
+    if (t.women > 0 && !nightOnly(svc)) {
       var a = parseHM(wn.start), b = parseHM(wn.end);
       if (a === null) errs.push({ step: 'women', field: "Female window start", msg: wn.start ? 'Start time "' + wn.start + '" is not a time. Use HH:MM.' : 'Enter the earliest time a female may start an office duty. Nothing is assumed, you decide.' });
       if (b === null) errs.push({ step: 'women', field: "Female window end", msg: wn.end ? 'End time "' + wn.end + '" is not a time. Use HH:MM.' : 'Enter the latest time a female may finish an office duty. Nothing is assumed, you decide.' });
@@ -688,15 +789,16 @@ var RM = (function () {
       if (s && e && (b < s || a > e)) errs.push({ step: 'holidays', field: 'Planned week-offs', msg: l.name + ': ' + l.from + ' to ' + l.to + ' is outside the roster period.' });
     });
     var fs = parseHM(inp.prev && inp.prev.firstStart);
-    if (fs === null) errs.push({ step: 'prev', field: 'First service start time', msg: 'First service start "' + (inp.prev && inp.prev.firstStart || '') + '" is not a time. Use HH:MM, for example 07:00.' });
+    if (fs === null) errs.push({ step: 'service', field: 'First shift start time', msg: 'First shift start "' + (inp.prev && inp.prev.firstStart || '') + '" is not a time. Use HH:MM, for example 07:00.' });
     var r = inp.rules || {};
     [['minRestH', 'Minimum rest (hours)', 10, 16], ['maxNights', 'Max consecutive nights', 2, 8], ['maxWork', 'Max consecutive working days', 5, 10], ['maxOffRun', 'Max consecutive week-offs', 1, 4], ['maxDutyH', 'Max duty length (hours)', 1, 12], ['overlapMin', 'Handover overlap (minutes)', 20, 240]]
       .forEach(function (x) {
         if (!(typeof r[x[0]] === 'number' && r[x[0]] >= x[2] && r[x[0]] <= x[3])) errs.push({ step: 'rules', field: x[1], msg: x[1] + ' = ' + r[x[0]] + ' is not valid. Allowed: ' + x[2] + ' to ' + x[3] + '.' });
       });
     if (svc && fs !== null && errs.filter(function (x) { return x.step === 'rules'; }).length === 0) {
-      var sh = buildShifts(svc, fs, r.shiftEdits);
-      var cfgErrs = checkShiftConfig(svc, sh, r);
+      var sh = buildShifts(svc, fs, r.shiftEdits, Math.max(30, r.overlapMin || 30)), rChk = r;
+      if (svc.layout) { var lg = 0; Object.keys(sh).forEach(function (c0) { if (c0 !== 'G') lg = Math.max(lg, sh[c0].len); }); var nd = Math.ceil(lg / 60); if (nd > r.maxDutyH && nd <= 12) rChk = Object.assign({}, r, { maxDutyH: nd }); }
+      var cfgErrs = checkShiftConfig(svc, sh, rChk);
       cfgErrs.forEach(function (m) { errs.push({ step: 'rules', field: 'Shift times', msg: m }); });
     }
     return errs;
@@ -708,7 +810,7 @@ var RM = (function () {
     });
     var codes = monitorCodes(svc);
     // coverage over service window
-    var S0 = sh.M.start, W = svc.H * 60;
+    var S0 = sh[svc.layout ? svc.layout[0].code : "M"].start, W = svc.H * 60;
     var cov = new Array(W).fill(0);
     codes.forEach(function (c) {
       for (var day = -1; day <= 0; day++) {
@@ -745,7 +847,7 @@ var RM = (function () {
     return need;
   }
   function buildContext(inp) {
-    var svc = parseService(inp.service.svc, inp.service.pair), n = inp.service.n, nBy = nByOf(inp.service); setPair(svc);
+    var svc = parseService(inp.service.svc, inp.service.pair, inp.service.layout), n = inp.service.n, nBy = nByOf(inp.service); setPair(svc);
     var start = dateFromISO(inp.period.start), end = dateFromISO(inp.period.end);
     var D = daysBetween(start, end) + 1;
     var hol = {};
@@ -757,7 +859,8 @@ var RM = (function () {
     }
     var rules = Object.assign({}, DEFAULT_RULES, inp.rules || {});
     var S = parseHM(inp.prev.firstStart);
-    var shifts = buildShifts(svc, S, rules.shiftEdits);
+    var shifts = buildShifts(svc, S, rules.shiftEdits, Math.max(30, rules.overlapMin || 30)), dutyAuto = 0;
+    if (svc.layout) { var lgst = 0; Object.keys(shifts).forEach(function (c0) { if (c0 !== 'G') lgst = Math.max(lgst, shifts[c0].len); }); var needH = Math.ceil(lgst / 60); if (needH > rules.maxDutyH && needH <= 12) { rules = Object.assign({}, rules, { maxDutyH: needH }); dutyAuto = needH; } }
     var men = inp.team.men, women = inp.team.women;
     var people = [];
     for (var a = 0; a < men; a++) people.push({ name: (inp.team.menNames[a] || 'Male ' + (a + 1)), w: false, tag: 'M' });
@@ -775,7 +878,7 @@ var RM = (function () {
       else womanCan[c] = shifts[c].start >= ws && shifts[c].start + shifts[c].len <= we;
     });
     // Women's evening profile: on a day a woman takes the evening, the surrounding shifts change so every handover is kept
-    if (svc.H === 24 && shifts.E && shifts.NB && shifts.N && women > 0 && ws !== null && we !== null && !womanCan.E) {
+    if (svc.H === 24 && shifts.E && shifts.NB && shifts.N && !shifts.X && women > 0 && ws !== null && we !== null && !womanCan.E) {
       var maxD = rules.maxDutyH * 60, ov = rules.overlapMin;
       var ewLen = shifts.E.len, ewStart = we - ewLen;
       var nwStart = we - ov, nwLen = Math.min(shifts.N.len, maxD);
@@ -844,13 +947,34 @@ var RM = (function () {
     // fixed shifts: a person who always works one shift
     var fixedOf = people.map(function () { return null; }), fixErr = [];
     var fixedDay = people.map(function () { return new Array(D).fill(null); });
+    var allowedDay = people.map(function () { return new Array(D).fill(null); });
     var fixedCodesDay = []; for (var fd0 = 0; fd0 < D; fd0++) fixedCodesDay.push({});
     var fixedCount = [];
     (inp.fixed || []).forEach(function (f) {
       var pi = -1; people.forEach(function (pp, i) { if (pp.name.toLowerCase() === String(f.name || '').toLowerCase()) pi = i; });
       if (pi < 0) return;
-      var code = String(f.shift || '').toUpperCase();
-      if (!shifts[code] || ['M', 'E', 'N', 'NB', 'G'].indexOf(code) < 0) { fixErr.push(people[pi].name + ': "' + f.shift + '" is not a shift of this service.'); return; }
+      var multi = (Array.isArray(f.shift) ? f.shift : String(f.shift || '').split(/[+,\/ ]+/)).map(function (x) { return String(x).toUpperCase(); }).filter(Boolean);
+      if (multi.length > 1) {
+        var bad = multi.filter(function (c) { return !shifts[c] || ['M', 'E', 'X', 'Y', 'N', 'NB', 'G'].indexOf(c) < 0; });
+        if (bad.length) { fixErr.push(people[pi].name + ': "' + bad.join(', ') + '" is not a shift of this service.'); return; }
+        var badW = people[pi].w ? multi.filter(function (c) { return !womanCan[c]; }) : [];
+        if (badW.length) { fixErr.push(people[pi].name + ' cannot work ' + badW.join(', ') + ' (outside the female window, or night backup which is a male post).'); return; }
+        var am = 0, bm = D - 1;
+        if (f.from || f.to) {
+          var fim = f.from || days[0].iso, tim = f.to || f.from || days[D - 1].iso;
+          if (tim < fim) { fixErr.push(people[pi].name + ': the shift choice ends (' + tim + ') before it starts (' + fim + ').'); return; }
+          am = -1; bm = -1;
+          for (var qm = 0; qm < D; qm++) { if (days[qm].iso >= fim && am < 0) am = qm; if (days[qm].iso <= tim) bm = qm; }
+          if (am < 0 || bm < am) { fixErr.push(people[pi].name + ': the dates ' + fim + ' to ' + tim + ' are outside the roster period.'); return; }
+        }
+        for (var tm = am; tm <= bm; tm++) {
+          if (fixedDay[pi][tm]) { fixErr.push(people[pi].name + ' has a fixed shift and a shift choice on ' + days[tm].iso + '.'); return; }
+          allowedDay[pi][tm] = multi.slice();
+        }
+        return;
+      }
+      var code = multi[0] || '';
+      if (!shifts[code] || ['M', 'E', 'X', 'Y', 'N', 'NB', 'G'].indexOf(code) < 0) { fixErr.push(people[pi].name + ': "' + f.shift + '" is not a shift of this service.'); return; }
       if (people[pi].w && !womanCan[code]) { fixErr.push(people[pi].name + ' cannot work ' + code + ' as a fixed shift: it is outside the female window' + (code === 'NB' ? ' (night backup is a male in the office)' : '') + '.'); return; }
       var a0 = 0, b0 = D - 1;
       if (f.from || f.to) {
@@ -866,21 +990,22 @@ var RM = (function () {
       }
       fixedOf[pi] = fixedOf[pi] || code;
     });
+    people.forEach(function (pp, i) { allowedDay[i].forEach(function (a, t) { if (a && fixedDay[i][t]) { fixErr.push(pp.name + ' has a fixed shift and a shift choice on ' + days[t].iso + '.'); allowedDay[i][t] = null; } }); });
     for (var fd = 0; fd < D; fd++) { var cnt = {}; people.forEach(function (pp, i) { var c = fixedDay[i][fd]; if (c) { fixedCodesDay[fd][c] = true; cnt[c] = (cnt[c] || 0) + 1; } }); fixedCount.push(cnt); }
     var fixedCodes = {};
     var seenMsg = {};
     fixedCount.forEach(function (cnt, fd) {
-      ['M', 'E', 'N'].forEach(function (c) { if (cnt[c] > 1 && !seenMsg[c]) { seenMsg[c] = 1; var nm = people.filter(function (pp, i) { return fixedDay[i][fd] === c; }).map(function (pp) { return pp.name; }); fixErr.push(nm.join(' and ') + ' are both fixed on ' + c + ' on ' + days[fd].iso + '. Two people cannot be fixed on the same shift for the same dates.'); } });
+      ['M', 'E', 'X', 'Y', 'N'].forEach(function (c) { if (cnt[c] > 1 && !seenMsg[c]) { seenMsg[c] = 1; var nm = people.filter(function (pp, i) { return fixedDay[i][fd] === c; }).map(function (pp) { return pp.name; }); fixErr.push(nm.join(' and ') + ' are both fixed on ' + c + ' on ' + days[fd].iso + '. Two people cannot be fixed on the same shift for the same dates.'); } });
       if (cnt.NB > 1 && !seenMsg.NB) { seenMsg.NB = 1; var nb = people.filter(function (pp, i) { return fixedDay[i][fd] === 'NB'; }).map(function (pp) { return pp.name; }); fixErr.push(nb.join(' and ') + ' are both fixed on NB on ' + days[fd].iso + '. Two people cannot be fixed on the same shift for the same dates.'); }
       Object.keys(cnt).forEach(function (c) { fixedCodes[c] = true; });
     });
-    var dayH = (function () { var L = ['M', 'E', 'N', 'NB'].filter(function (c) { return !!shifts[c]; }).map(function (c) { return shifts[c].len; }); if (!L.length) return shifts.M.len / 60; var m = 0; L.forEach(function (x) { m += x; }); return Math.round(m / L.length / 60 * 100) / 100; })();
+    var dayH = (function () { var L = ['M', 'E', 'X', 'Y', 'N', 'NB'].filter(function (c) { return !!shifts[c]; }).map(function (c) { return shifts[c].len; }); if (!L.length) return shifts.M.len / 60; var m = 0; L.forEach(function (x) { m += x; }); return Math.round(m / L.length / 60 * 100) / 100; })();
     var ctx = {
       leave: leave, leaveN: leaveN, leaveCnt: leaveCnt, leaveWork: leaveWork, availFrom: availFrom,
-      bufNoOff: bufNoOff, forceOff: forceOff, forceCnt: forceCnt, forceAhead: forceAhead, planCountOn: (function () { var a = new Array(D + 1).fill(0); forceOff.forEach(function (f) { if (f) for (var t = 0; t < D; t++) if (f[t]) a[t]++; }); return a; })(), planErr: planErr, offRunAuto: offRunAuto, fixedOf: fixedOf, fixedDay: fixedDay, fixedCodesDay: fixedCodesDay, fixedCodes: fixedCodes, fixErr: fixErr,
+      bufNoOff: bufNoOff, forceOff: forceOff, forceCnt: forceCnt, forceAhead: forceAhead, planCountOn: (function () { var a = new Array(D + 1).fill(0); forceOff.forEach(function (f) { if (f) for (var t = 0; t < D; t++) if (f[t]) a[t]++; }); return a; })(), planErr: planErr, offRunAuto: offRunAuto, fixedOf: fixedOf, fixedDay: fixedDay, allowedDay: allowedDay, fixedCodesDay: fixedCodesDay, fixedCodes: fixedCodes, fixErr: fixErr,
       inp: inp, svc: svc, n: n, nBy: nBy, start: start, D: D, days: days, rules: rules, S: S, shifts: shifts, people: people, P: people.length,
       nM: men, nW: women, closed: closed, W: W, extraOffs: W - closed, holOpen: holOpen, workingDays: D - W - holOpen,
-      dayH: dayH, targetHours: dayH * (D - W - holOpen), womanCan: womanCan, ws: ws, we: we, prev: prev, team: teamSize(svc, nBy), monitors: monitorCodes(svc)
+      dutyAuto: dutyAuto, dayH: dayH, targetHours: dayH * (D - W - holOpen), womanCan: womanCan, ws: ws, we: we, prev: prev, team: teamSize(svc, nBy), monitors: monitorCodes(svc)
     };
     ctx.softNights = inp.floorMaxNights || 0;
     ctx.floorMW = inp.floorMaxWork || rules.maxWork; // week-off floor always uses the user's own 6-days-in-a-row rule, even in emergency cover
@@ -930,7 +1055,8 @@ var RM = (function () {
     ctx.demand = demandInfo(ctx);
     return ctx;
   }
-  function isNight(c) { return c === 'N' || c === 'NB' || c === 'NBW' || c === 'NW' || (NIGHT_SLOT !== null && c === NIGHT_SLOT); }
+  function fixOk(ctx, p, d, code) { var f = ctx.fixedDay[p][d]; if (f && baseCode(code) !== f) return false; var a = ctx.allowedDay && ctx.allowedDay[p][d]; if (a && a.indexOf(baseCode(code)) < 0) return false; return true; }
+  function isNight(c) { return c === 'N' || c === 'NB' || c === 'NBW' || c === 'NW' || NIGHT_SET.indexOf(c) >= 0; }
 
   function nightOptions(ctx) {
     var sh = ctx.shifts;
@@ -943,12 +1069,13 @@ var RM = (function () {
   }
   function slotsFor(ctx, day, nopt, prof, afterW) {
     var s = [], nM = ctx.nBy.M, nE = ctx.nBy.E, sh = ctx.shifts, i, w = prof === 'W' && sh.EW && nopt.NB > 0 && nopt.N > 0;
-    for (i = 0; i < nM; i++) {
+    if (sh.M) for (i = 0; i < nM; i++) {
       if (i === 0 && afterW && sh.MA) s.push({ code: 'MA', menOnly: true });
       else if (i === 0 && w && sh.MW) s.push({ code: 'MW' });
       else s.push({ code: 'M' });
     }
     if (sh.E) for (i = 0; i < nE; i++) s.push({ code: (w && i === 0) ? 'EW' : 'E' });
+    ['X', 'Y'].forEach(function (xc) { if (sh[xc]) for (i = 0; i < ctx.nBy[xc]; i++) s.push({ code: xc }); });
     if (sh.N) {
       for (i = 0; i < nopt.N; i++) s.push({ code: (w && i === 0) ? 'NW' : 'N', womenOnly: nopt.NB > 0 && ctx.rules.nbMode === 'whenWomen' });
       for (i = 0; i < nopt.Nm; i++) s.push({ code: 'N', menOnly: true });
@@ -964,7 +1091,7 @@ var RM = (function () {
       nightOptions(ctx).forEach(function (o) { minSlots = Math.min(minSlots, slotsFor(ctx, d, o).length); });
       var sl = slotsFor(ctx, d, base);
       total += sl.length;
-      sl.forEach(function (x) { if (x.code === 'NB' || x.code === 'E' && !ctx.womanCan.E) menOnly++; });
+      sl.forEach(function (x) { if (x.code === 'NB' || (x.code === 'E' || x.code === 'X' || x.code === 'Y') && !ctx.womanCan[x.code]) menOnly++; });
     });
     var openDays = ctx.D - ctx.closed;
     var cap = ctx.P * (openDays - ctx.extraOffs);
@@ -1021,10 +1148,12 @@ var RM = (function () {
   Object.keys(TRANS).forEach(function (k) { TRANS[k].NBW = TRANS[k].NB; });
   ['NW', 'MW', 'MA'].forEach(function (v) { var b = v === 'NW' ? 'N' : 'M'; Object.keys(TRANS).forEach(function (k) { TRANS[k][v] = TRANS[k][b]; }); TRANS[v] = Object.assign({}, TRANS[b]); TRANS[v][v] = 0; });
   TRANS.NBW = Object.assign({}, TRANS.NB); TRANS.NBW.NBW = 0; TRANS.NB.NBW = 0.3; TRANS.NBW.NB = 0.3;
+  ['X', 'Y'].forEach(function (v) { Object.keys(TRANS).forEach(function (k) { TRANS[k][v] = TRANS[k].E; }); TRANS[v] = Object.assign({}, TRANS.E); TRANS[v][v] = 0; });
+  TRANS.X.Y = 0.3; TRANS.Y.X = 0.3; TRANS.E.X = 0.3; TRANS.X.E = 0.3; TRANS.E.Y = 0.3; TRANS.Y.E = 0.3;
   function initStates(ctx) {
     return ctx.prev.map(function (p) {
       return { workRun: p.workRun, nightRun: p.nightRun, offRun: p.offRun || 0, lastCode: p.lastCode, lastEnd: p.lastEnd, balance: p.balance || 0, offsLeft: ctx.offsOf ? ctx.offsOf[ctx.prev.indexOf(p)] : ctx.extraOffs,
-        cnt: { M: 0, E: 0, EW: 0, N: 0, NW: 0, NB: 0, NBW: 0, MW: 0, MA: 0, G: 0 }, wk: 0, hol: 0, night: 0, lastProf: 'S' };
+        cnt: { M: 0, E: 0, X: 0, Y: 0, EW: 0, N: 0, NW: 0, NB: 0, NBW: 0, MW: 0, MA: 0, G: 0 }, wk: 0, hol: 0, night: 0, lastProf: 'S' };
     });
   }
   function cloneStates(st) { return st.map(function (s) { var o = Object.assign({}, s); o.cnt = Object.assign({}, s.cnt); return o; }); }
@@ -1074,7 +1203,7 @@ var RM = (function () {
       var s = st[p], x = sh[code];
       if (!x) return false;
       if (ctx.people[p].w && !ctx.womanCan[code]) return false;
-      if (ctx.fixedDay[p][d] && baseCode(code) !== ctx.fixedDay[p][d]) return false;
+      if (!fixOk(ctx, p, d, code)) return false;
       if (x.len > R.maxDutyH * 60) return false;
       if (s.workRun >= R.maxWork) return false;
       if (d * 1440 + x.start - s.lastEnd < R.minRestH * 60) return false;
@@ -1114,11 +1243,11 @@ var RM = (function () {
     var base = ctx.base || null, stick = base ? (par.stick || 3) : 0;
     var noise = par.noise * (1 + variant * 0.8);
     var fillers = ['G'];
-    var FAMS = { M: ['M', 'MW', 'MA'], E: ['E', 'EW'], N: ['N', 'NW'], NB: ['NB', 'NBW'] };
+    var FAMS = { M: ['M', 'MW', 'MA'], E: ['E', 'EW'], X: ['X'], Y: ['Y'], N: ['N', 'NW'], NB: ['NB', 'NBW'] };
     function fam(code) { return FAMS[baseCode(code)] || [code]; }
     function famCnt(s, code) { var t = 0; fam(code).forEach(function (c) { t += s.cnt[c] || 0; }); return t; }
     var famAvg = {};
-    ['M', 'MW', 'MA', 'E', 'EW', 'N', 'NW', 'NB', 'NBW'].forEach(function (c) {
+    ['M', 'MW', 'MA', 'E', 'EW', 'X', 'Y', 'N', 'NW', 'NB', 'NBW'].forEach(function (c) {
       var bs = baseCode(c), list = bs === 'NB' ? (eligible.NB || []) : ctx.people.map(function (x, i) { return i; }), sum = 0;
       list.forEach(function (i) { sum += famCnt(st[i], c); });
       famAvg[c] = list.length ? sum / list.length : 0;
@@ -1276,7 +1405,7 @@ var RM = (function () {
       hard.push({ id: id, name: name, pass: viol.length === 0, detail: viol.length ? viol.slice(0, 3).join(' · ') + (viol.length > 3 ? ' · +' + (viol.length - 3) + ' more' : '') : okText, count: viol.length });
     }
     // H1 coverage
-    var v = [], S0 = sh.M.start, W = svc.H * 60, req = new Array(W).fill(0);
+    var v = [], S0 = sh[svc.layout ? svc.layout[0].code : "M"].start, W = svc.H * 60, req = new Array(W).fill(0);
     ctx.monitors.forEach(function (c) { var x = sh[c]; if (!x) return; for (var k = 0; k < x.len; k++) { var ix = (x.start - S0 + k) % W; if (ix < 0) ix += W; req[ix] = Math.max(req[ix], ctx.nBy[c]); } });
     days.forEach(function (day) {
       if (!day.open) return;
@@ -1302,7 +1431,7 @@ var RM = (function () {
     add('H3', 'Female nights are home, never office or backup', v, 'Every female night is marked home.');
     // H4
     v = [];
-    if (svc.H === 24 && !(R.nbMode === 'none' && ctx.nW > 0)) {
+    if (sh.N && !(R.nbMode === 'none' && ctx.nW > 0)) {
       days.forEach(function (day) {
         if (!day.open) return;
         var a0 = day.i * 1440 + sh.N.start, L = sh.N.len, cov = new Array(L).fill(0);
@@ -1314,7 +1443,7 @@ var RM = (function () {
         for (var t = 0; t < L; t++) if (cov[t] < 1) { v.push(day.iso + ' ' + fmtHM(sh.N.start + t) + ' has no male in office'); break; }
       });
     }
-    add('H4', 'A male on the office post every night', v, svc.H !== 24 ? 'Not a 24-hour service.' : (R.nbMode === 'none' && ctx.nW > 0) ? 'Switched off: no night backup was chosen.' : 'Every night minute has a male in the office or on backup.');
+    add('H4', 'A male on the office post every night', v, !sh.N ? 'No night shift in this service.' : (R.nbMode === 'none' && ctx.nW > 0) ? 'Switched off: no night backup was chosen.' : 'Every night minute has a male in the office or on backup.');
     // H5
     v = [];
     duties.forEach(function (x) { if (x.len > R.maxDutyH * 60) v.push(ctx.people[x.p].name + ' ' + days[x.d].iso + ' ' + x.len / 60 + ' h'); });
@@ -1329,6 +1458,7 @@ var RM = (function () {
     var hasReq = false;
     ctx.people.forEach(function (pp, p) {
       if (ctx.forceOff[p]) for (var d = 0; d < ctx.D; d++) if (ctx.forceOff[p][d]) { hasReq = true; if (grid[p][d] !== 'OFF') v.push(pp.name + ' should be off on ' + days[d].iso + ' (planned week-off) but works ' + grid[p][d]); }
+      for (var d3 = 0; d3 < ctx.D; d3++) { var al3 = ctx.allowedDay[p][d3], c3 = grid[p][d3]; if (al3) { hasReq = true; if (c3 && c3 !== 'OFF' && c3 !== 'CL' && c3 !== 'LV' && al3.indexOf(baseCode(c3)) < 0) v.push(pp.name + ' may only work ' + al3.map(outCode).join(' or ') + ' but has ' + outCode(c3) + ' on ' + days[d3].iso); } }
       if (ctx.fixedOf[p]) { hasReq = true; for (var d2 = 0; d2 < ctx.D; d2++) { var fz = ctx.fixedDay[p][d2], c2 = grid[p][d2]; if (fz && c2 && c2 !== 'OFF' && c2 !== 'CL' && c2 !== 'LV' && baseCode(c2) !== fz) v.push(pp.name + ' is fixed on ' + fz + ' but has ' + c2 + ' on ' + days[d2].iso); }
       }
     });
@@ -1389,7 +1519,7 @@ var RM = (function () {
   function analyze(ctx, cand) {
     var grid = cand.grid, P = ctx.P, days = ctx.days, sh = ctx.shifts;
     var per = ctx.people.map(function (pp, p) {
-      var o = { name: pp.name, w: pp.w, M: 0, E: 0, EW: 0, N: 0, NW: 0, NB: 0, NBW: 0, MW: 0, MA: 0, G: 0, duty: 0, hours: 0, wk: 0, hol: 0, off: 0, leave: 0, blocks: [], maxStreak: 0, changes: 0, nightsOffAfter: 0, nightBlocks: 0 };
+      var o = { name: pp.name, w: pp.w, M: 0, E: 0, X: 0, Y: 0, EW: 0, N: 0, NW: 0, NB: 0, NBW: 0, MW: 0, MA: 0, G: 0, duty: 0, hours: 0, wk: 0, hol: 0, off: 0, leave: 0, blocks: [], maxStreak: 0, changes: 0, nightsOffAfter: 0, nightBlocks: 0 };
       var streak = 0, nb = 0, prev = ctx.prev[p].lastCode, lastWorked = null;
       for (var d = 0; d < ctx.D; d++) {
         var c = grid[p][d];
@@ -1413,7 +1543,7 @@ var RM = (function () {
       }
       if (nb > 0) { o.blocks.push(nb); o.nightBlocks++; }
       o.Mf = o.M + o.MW + o.MA; o.Ef = o.E + o.EW; o.Nf = o.N + o.NW; o.NBf = o.NB + o.NBW;
-      o.nights = o.Nf + o.NBf + (NIGHT_SLOT !== null ? (o[NIGHT_SLOT] || 0) : 0);
+      o.nights = o.Nf + o.NBf; NIGHT_SET.forEach(function (nc) { o.nights += (o[nc] || 0); });
       o.target = ctx.dayH * (ctx.workingDays + ctx.extraOffs - ctx.offsOf[p] - ctx.leaveWork[p]);
       o.balance = Math.round((o.hours - o.target) * 10) / 10;
       o.carryBalance = Math.round((o.balance + (ctx.prev[p].balance || 0)) * 10) / 10;
@@ -1428,14 +1558,14 @@ var RM = (function () {
     var nightIdx = spreadIdx(nfp.map(function (x) { return x.nights; }));
     var spIdx = spreadIdx(nfp.map(function (x) { return x.special; }));
     var mixParts = [], mixText = [];
-    ['M', 'E', 'G'].forEach(function (c) {
+    ['M', 'E', 'X', 'Y', 'G'].forEach(function (c) {
       if (!sh[c]) return;
       [false, true].forEach(function (isW) {
         var el = per.filter(function (x, i) { return ctx.people[i].w === isW && !ctx.fixedOf[i] && !(isW && !ctx.womanCan[c] && !(c === 'E' && sh.EW)); });
         if (el.length < 2) return;
         var s = spreadIdx(el.map(function (x) { return c === 'E' ? x.Ef : c === 'M' ? x.Mf : x[c]; }));
         if (s.max === 0) return;
-        mixParts.push(s.idx); mixText.push(c + (ctx.nW && ctx.nM ? (isW ? ' female ' : ' male ') : ' ') + s.min + '–' + s.max);
+        mixParts.push(s.idx); mixText.push(outCode(c) + (ctx.nW && ctx.nM ? (isW ? ' female ' : ' male ') : ' ') + s.min + '–' + s.max);
       });
     });
     if (sh.EW && ctx.nW) {
@@ -1542,7 +1672,7 @@ var RM = (function () {
      This pass swaps equal-length blocks of monitor shifts between two people on the same days, keeping every hard rule,
      and keeps going while the night share, weekend share and night-run length get fairer. Week-off counts never change. */
   function balancePhase(ctx, cand, budgetMs) {
-    var plain = { M: 1, E: 1, N: 1, NB: 1 }, grid = cand.grid.map(function (r) { return r.slice(); }), P = ctx.P, D = ctx.D;
+    var plain = { M: 1, E: 1, X: 1, Y: 1, N: 1, NB: 1 }, grid = cand.grid.map(function (r) { return r.slice(); }), P = ctx.P, D = ctx.D;
     var t0 = Date.now();
     function nightRuns(g) {
       var pen = 0;
@@ -1583,6 +1713,25 @@ var RM = (function () {
     }
     return moves ? grid : null;
   }
+  /* fairness as a percentile: where a roster stands among the valid rosters the tool built for the same inputs.
+     100 means fairer than all of them, 50 means in the middle. The raw score (an.score) is still what ranks rosters. */
+  function pctOf(score, pool) {
+    if (!pool || pool.length < 8) return null;
+    var below = 0, eq = 0;
+    pool.forEach(function (x) { if (x < score - 1e-9) below++; else if (Math.abs(x - score) <= 1e-9) eq++; });
+    return Math.max(1, Math.min(100, Math.round(100 * (below + eq) / pool.length)));
+  }
+  function pctText(p) {
+    if (p === null || p === undefined) return '';
+    var v = p % 100, sfx = (v >= 11 && v <= 13) ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' }[p % 10] || 'th');
+    return p + sfx + ' percentile';
+  }
+  function poolPct(ctx, cand, attempts) {
+    if (!ctx._pool) {
+      try { var n = attempts || 60, sp = createSearch(ctx, n, 0); sp.step(n); ctx._pool = sp.found.map(function (c) { return c.an.score; }); } catch (e) { ctx._pool = []; }
+    }
+    return pctOf(cand.an.score, ctx._pool);
+  }
   function finalize(ctx, search, keep) {
     function rk(c) { return (c.how === 'cover' ? 1000 : 0) + c.an.score; }
     var list = search.found.slice().sort(function (a, b) { return rk(b) - rk(a); });
@@ -1613,8 +1762,10 @@ var RM = (function () {
       while (main.length < 5 && rest.length) main.push(rest.shift());
     }
     main.sort(function (a, b) { return rk(b) - rk(a); });
-    var all = main.concat(rest);
-    return { top: main, more: rest, valid: out.length, unique: search.found.length };
+    var pool = search.found.map(function (c) { return c.an.score; });
+    if (pool.length >= 8) ctx._pool = pool;
+    out.forEach(function (c) { c.pct = pctOf(c.an.score, pool); });
+    return { top: main, more: rest, valid: out.length, unique: search.found.length, pool: pool.length };
   }
 
   function whyText(ctx, rank, c, best) {
@@ -1661,6 +1812,7 @@ var RM = (function () {
   }
   function overlapFor(ctx, c) {
     var sh = ctx.shifts, NEXT = { M: 'E', E: 'N', N: 'M+', MW: 'EW', EW: 'NW', NW: 'MA+', MA: 'E' };
+    if (ctx.svc.layout) { NEXT = {}; ctx.svc.layout.forEach(function (r, i, a) { NEXT[r.code] = i + 1 < a.length ? a[i + 1].code : (ctx.svc.H === 24 ? a[0].code + '+' : ''); }); }
     var nx = NEXT[c]; if (!nx) return '';
     var plus = /\+$/.test(nx) ? 1440 : 0; nx = nx.replace('+', '');
     if (!sh[nx] || !sh[c]) return '';
@@ -1709,7 +1861,7 @@ var RM = (function () {
       else if (best.mo && menActive < best.mo) out.push({ iso: day.iso, msg: day.iso + ': only ' + menActive + ' male available, the night needs ' + best.mo + ' in the office.' });
     });
     // a run of days with nobody spare: the night rules (max nights in a row, then a rest) cannot be met
-    if (ctx.svc.H === 24) {
+    if (ctx.shifts.N) {
       var run = [], flush = function () {
         if (run.length >= 3) out.unshift({ iso: run[0].iso, fatal: true, msg: 'Not enough people for ' + run[0].iso + ' to ' + run[run.length - 1].iso + ' (' + run.length + ' days): everyone who is left must work every day, and the night rules (a rest after ' + ctx.rules.maxNights + ' nights in a row) cannot be kept with nobody spare. Options: a temporary resource for those days, a shorter leave (2 days or less), or one more person in the team.' });
         run = [];
@@ -1776,9 +1928,9 @@ var RM = (function () {
           for (var ri = 0; ri < rs.length && !done; ri++) {
             var rr = rs[ri], X = g[rr][tt];
             if (ctx.people[p].w && !ctx.womanCan[X]) continue;
-            if (ctx.fixedDay[p][tt] && baseCode(X) !== ctx.fixedDay[p][tt]) continue;
+            if (!fixOk(ctx, p, tt, X)) continue;
             var rNew = (owed[rr] || 0) > 0 ? 'OFF' : (X === 'G' ? 'G' : 'G');
-            if (rNew === 'G' && X !== 'G' && ctx.fixedDay[rr][tt] && ctx.fixedDay[rr][tt] !== 'G') continue;
+            if (rNew === 'G' && X !== 'G' && !fixOk(ctx, rr, tt, 'G')) continue;
             if (rNew === 'G' && X !== 'G' && (tt > 0 && !pairOk(ctx, g[rr][tt - 1], 'G') || tt + 1 < ctx.D && !pairOk(ctx, 'G', g[rr][tt + 1]))) { if ((owed[rr] || 0) > 0) rNew = 'OFF'; else continue; }
             if (tt > 0 && !pairOk(ctx, g[p][tt - 1], X)) continue;
             if (tt + 1 < ctx.D && !pairOk(ctx, X, g[p][tt + 1])) continue;
@@ -1849,7 +2001,7 @@ var RM = (function () {
           for (i = 0; i < L && ok; i++) {
             var jb = run[i], c0 = cur.g[qi][jb.d];
             if (qq.w && !ctx2.womanCan[jb.s]) ok = false;
-            else if (ctx2.fixedDay[qi][jb.d] && baseCode(jb.s) !== ctx2.fixedDay[qi][jb.d]) ok = false;
+            else if (!fixOk(ctx2, qi, jb.d, jb.s)) ok = false;
             else if (cur.locked[qi + ':' + jb.d] || c0 === jb.s) ok = false;
             else if (L > 1 ? (c0 !== 'G' && c0 !== 'OFF') : (c0 !== 'G' && c0 !== 'OFF' && !isMon(c0))) ok = false;
             else if (i > 0 && !pairOk(ctx2, run[i - 1].s, jb.s)) ok = false;
@@ -1864,7 +2016,7 @@ var RM = (function () {
             var nx = g[qi][last.d + 1];
             if (!pairOk(ctx2, last.s, nx)) {
               if (cur.locked[qi + ':' + (last.d + 1)] || ch >= 8) return;
-              var repl = pairOk(ctx2, last.s, 'G') && (!ctx2.fixedDay[qi][last.d + 1] || ctx2.fixedDay[qi][last.d + 1] === 'G') ? 'G' : (offDays.length ? 'OFF' : null);
+              var repl = pairOk(ctx2, last.s, 'G') && fixOk(ctx2, qi, last.d + 1, 'G') ? 'G' : (offDays.length ? 'OFF' : null);
               if (!repl) return;
               g[qi][last.d + 1] = repl; lk[qi + ':' + (last.d + 1)] = 1; ch++;
               if (isMon(nx)) np.unshift({ d: last.d + 1, s: nx, from: qi });
@@ -2085,7 +2237,7 @@ var RM = (function () {
     cand.soft = softRules(ctx, cand, cand.an);
     return cand;
   }
-  var LETTERS = ['M', 'E', 'N', 'NB', 'G', 'OFF', 'CL', 'LV'];
+  var LETTERS = ['M', 'E', 'N', 'NB', 'G', 'OFF', 'CL', 'LV', 'A', 'R', 'L', 'X', 'Y'];
   function rosterFromFile(text, fname, base, extra) {
     var res = { errors: [], warnings: [], version: '1', history: [] };
     var t = (text || '').trim();
@@ -2141,7 +2293,9 @@ var RM = (function () {
     if (snap && snap.service && snap.team) inp = JSON.parse(JSON.stringify(snap));
     else {
       inp = JSON.parse(JSON.stringify(base || {}));
-      var duty = {}, dow = [0, 0, 0, 0, 0, 0, 0], hasNB = false;
+      var duty = {}, dow = [0, 0, 0, 0, 0, 0, 0], hasNB = false, oddCode = false;
+      P.forEach(function (o) { Object.keys(o.days).forEach(function (k) { var c9 = o.days[k]; if (c9 === 'A' || c9 === 'R' || c9 === 'L' || c9 === 'X' || c9 === 'Y') oddCode = true; }); });
+      if (oddCode) { res.errors.push(fname + ': this roster uses a custom shift layout, which only the JSON or Excel file from this tool can carry. Upload that file instead.'); return res; }
       P.forEach(function (o) { Object.keys(o.days).forEach(function (k) { var c = o.days[k]; if (c === 'NB') hasNB = true; if (c === 'M' || c === 'E' || c === 'N' || c === 'NB') { duty[c] = 1; dow[dateFromISO(k).getUTCDay()]++; } }); });
       var set = ['M', 'E', 'N'].filter(function (c) { return duty[c]; }), H, pr = null;
       if (hasNB || set.length >= 3) H = 24; else if (set.length === 2) { H = 16; pr = set.join('') === 'ME' ? 'ME' : set.join('') === 'EN' ? 'EN' : set.join('') === 'MN' ? 'NM' : 'ME'; } else { H = 8; pr = set[0] || 'M'; }
@@ -2186,7 +2340,7 @@ var RM = (function () {
       }
     });
     var ctx;
-    try { var svc2 = parseService(inp.service.svc, inp.service.pair); setPair(svc2); ctx = buildContext(inp); }
+    try { var svc2 = parseService(inp.service.svc, inp.service.pair, inp.service.layout); setPair(svc2); ctx = buildContext(inp); }
     catch (er2) { res.errors.push(fname + ': the roster could not be rebuilt from this file (' + er2.message + ').'); return res; }
     var grid = [], bad = [];
     ctx.people.forEach(function (pp) {
@@ -2261,7 +2415,7 @@ var RM = (function () {
       var code = cells[is].trim().toUpperCase();
       if (code === 'LV' || code === 'L') code = 'OFF';
       code = inCode(code);
-      if (['M', 'E', 'EW', 'N', 'NW', 'NB', 'NBW', 'MW', 'MA', 'G', 'OFF', 'CL'].indexOf(code) < 0) { res.errors.push(fname + ' line ' + (i + 1) + ': shift "' + cells[is] + '" is not one of M, E, EW, N, NB, NBW, G, OFF.'); continue; }
+      if (['M', 'E', 'X', 'Y', 'EW', 'N', 'NW', 'NB', 'NBW', 'MW', 'MA', 'G', 'OFF', 'CL'].indexOf(code) < 0) { res.errors.push(fname + ' line ' + (i + 1) + ': shift "' + cells[is] + '" is not one of M, E, EW, N, NB, NBW, G, OFF.'); continue; }
       var nm = cells[ip].trim();
       (byP[nm.toLowerCase()] = byP[nm.toLowerCase()] || { name: nm, rows: [], bal: 0 }).rows.push({ dt: dt, code: code });
       if (ib >= 0 && cells[ib] !== '') byP[nm.toLowerCase()].bal = +cells[ib] || 0;
@@ -2311,10 +2465,10 @@ var RM = (function () {
   }
 
   function sizeTable(inp, attempts) {
-    var svc = parseService(inp.service.svc, inp.service.pair), T = teamSize(svc, nByOf(inp.service)), cur = inp.team.men + inp.team.women;
+    var svc = parseService(inp.service.svc, inp.service.pair, inp.service.layout), T = teamSize(svc, nByOf(inp.service)), cur = inp.team.men + inp.team.women;
     var ratio = cur ? inp.team.women / cur : 0, out = [];
     for (var sz = Math.max(2, T.N - 1); sz <= T.N + 2; sz++) {
-      var w = Math.min(sz - 1, Math.round(sz * ratio)); if (svc.H === 24 && sz - w < 1) w = sz - 1;
+      var w = Math.min(sz - 1, Math.round(sz * ratio)); if ((svc.H === 24 || hasNight(svc)) && sz - w < 1) w = sz - 1;
       var m = sz - w, copy = JSON.parse(JSON.stringify(inp));
       copy.team = { men: m, women: w, headcount: '', menNames: [], womenNames: [] };
       var row = { size: sz, m: m, w: w, suggested: sz === T.N, current: sz === cur };
@@ -2337,8 +2491,10 @@ var RM = (function () {
     parseHM: parseHM, fmtHM: fmtHM, dateFromISO: dateFromISO, iso: iso, addDays: addDays, daysBetween: daysBetween, prettyDate: prettyDate,
     parseService: parseService, nByOf: nByOf, teamSize: teamSize, defaultFirstStart: defaultFirstStart, buildShifts: buildShifts, checkShiftConfig: checkShiftConfig,
     validateInputs: validateInputs, buildContext: buildContext, createSearch: createSearch, finalize: finalize, validate: validate, analyze: analyze,
-    setPair: setPair, rosterFromFile: rosterFromFile, makeCand: makeCand, nextVersion: nextVersion, curH: function () { return CUR_H; }, outCode: outCode, inCode: inCode, PAIRS: PAIRS, PAIR16: PAIR16, PAIR8: PAIR8, PAIR_LABEL: PAIR_LABEL, whyText: whyText, toCSV: toCSV, toJSON: toJSON, parseHolidayText: parseHolidayText, mergeHolidays: mergeHolidays, parsePrevText: parsePrevText,
-    dayHoursFor: function (svc, S, edits) { var sh = buildShifts(svc, S, edits), L = ['M', 'E', 'N', 'NB'].filter(function (c) { return !!sh[c]; }).map(function (c) { return sh[c].len; }), m = 0; L.forEach(function (x) { m += x; }); return Math.round(m / L.length / 60 * 100) / 100; }, replanLeave: replanLeave, _lp: function () { return localPlans; }, mixTable: mixTable, baseCode: baseCode, isHome: isHome, VARIANTS: VARIANTS, leaveCheck: leaveCheck, leaveCover: leaveCover, holidayModeLabel: holidayModeLabel, isNight: isNight, overlapFor: overlapFor, hashStr: hashStr
+    pctOf: pctOf, pctText: pctText, poolPct: poolPct,
+    normLayout: normLayout, legacyOf: legacyOf, defaultLayout: defaultLayout, LAYOUT_LABELS: LAYOUT_LABELS, LABEL_NAME: LABEL_NAME,
+    hasNight: hasNight, nightOnly: nightOnly, setPair: setPair, rosterFromFile: rosterFromFile, makeCand: makeCand, nextVersion: nextVersion, curH: function () { return CUR_H; }, outCode: outCode, inCode: inCode, PAIRS: PAIRS, PAIR16: PAIR16, PAIR8: PAIR8, PAIR_LABEL: PAIR_LABEL, whyText: whyText, toCSV: toCSV, toJSON: toJSON, parseHolidayText: parseHolidayText, mergeHolidays: mergeHolidays, parsePrevText: parsePrevText,
+    dayHoursFor: function (svc, S, edits) { var sh = buildShifts(svc, S, edits), L = ['M', 'E', 'X', 'Y', 'N', 'NB'].filter(function (c) { return !!sh[c]; }).map(function (c) { return sh[c].len; }), m = 0; L.forEach(function (x) { m += x; }); return Math.round(m / L.length / 60 * 100) / 100; }, replanLeave: replanLeave, _lp: function () { return localPlans; }, mixTable: mixTable, baseCode: baseCode, isHome: isHome, VARIANTS: VARIANTS, leaveCheck: leaveCheck, leaveCover: leaveCover, holidayModeLabel: holidayModeLabel, isNight: isNight, overlapFor: overlapFor, hashStr: hashStr
   };
 })();
 if (typeof module !== 'undefined') module.exports = RM;
@@ -2388,7 +2544,7 @@ if (typeof module !== 'undefined') module.exports = RM;
   function SN(c) { var o = RM.outCode(c); if (o === 'N' && is16()) return 'Night'; return SHIFT_NAME[o] || SHIFT_NAME[c] || c; }
   function SNb(c) { var o = dd(c); if (o === 'N' && is16()) return 'Night'; return SHIFT_NAME[o] || o; }
   function dcodes(ctx) { return Object.keys(ctx.shifts).filter(function (c) { return RM.VARIANTS.indexOf(c) < 0; }); }
-  var SHIFT_NAME = { M: 'Morning', E: 'Evening', EW: 'Evening (female)', N: 'Night monitor', NW: 'Night monitor (female)', NB: 'Night backup', NBW: 'Night backup (female evening day)', MW: 'Morning (short)', MA: 'Morning (early)', G: 'General', OFF: 'Week-off', CL: 'Service closed', LV: 'Planned leave' };
+  var SHIFT_NAME = { R: 'Early morning', L: 'Late evening', M: 'Morning', A: 'Afternoon', E: 'Evening', EW: 'Evening (female)', N: 'Night monitor', NW: 'Night monitor (female)', NB: 'Night backup', NBW: 'Night backup (female evening day)', MW: 'Morning (short)', MA: 'Morning (early)', G: 'General', OFF: 'Week-off', CL: 'Service closed', LV: 'Planned leave' };
 
   /* ---------- state ---------- */
   function monthRange(y, m) {
@@ -2400,9 +2556,9 @@ if (typeof module !== 'undefined') module.exports = RM;
   var TODAY = RM.iso(new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1)));
   var S = {
     inp: {
-      service: { svc: '24x7', pair: 'ME', n: 1, by: {} },
+      service: { svc: '24x7', pair: 'ME', n: 1, by: {}, layout: null },
       period: { start: defRange[0], end: defRange[1] },
-      team: { men: 3, women: 2, headcount: '', menNames: [], womenNames: [], touched: false },
+      team: { men: 0, women: 0, headcount: '', menNames: [], womenNames: [], touched: false },
       holidays: { sources: [], manual: [], mode: 'normal', list: [] },
       weekoffs: { perPerson: 6, touched: false },
       leave: { list: [] },
@@ -2416,11 +2572,18 @@ if (typeof module !== 'undefined') module.exports = RM;
   };
   S.inp.weekoffs.perPerson = defaultWeekoffs();
 
-  function svcObj() { var s = RM.parseService(S.inp.service.svc, S.inp.service.pair); RM.setPair(s); return s; }
+  function svcObj() { var s = RM.parseService(S.inp.service.svc, S.inp.service.pair, S.inp.service.layout); RM.setPair(s); return s; }
   // people needed on each shift: the common n, with any per-shift override (Morning, Evening, Night)
-  function nByS(n, by) { n = n === undefined ? S.inp.service.n : n; by = by || S.inp.service.by || {}; return { M: by.M >= 1 ? by.M : n, E: by.E >= 1 ? by.E : n, N: by.N >= 1 ? by.N : n }; }
-  function perDayS(svc) { var b = nByS(); return b.M + (svc.H >= 16 ? b.E : 0) + (svc.H === 24 ? b.N : 0); }
-  function nLabel() { var svc = svcObj(), b = nByS(); if (!svc) return S.inp.service.n + ' per shift'; var codes = svc.H === 8 ? ['M'] : svc.H === 16 ? ['M', 'E'] : ['M', 'E', 'N']; var same = codes.every(function (c) { return b[c] === b[codes[0]]; }); return same ? b[codes[0]] + ' per shift' : codes.map(function (c) { return RM.outCode(c) + ' ' + b[c]; }).join(' · '); }
+  function nByS(n, by) { n = n === undefined ? S.inp.service.n : n; by = by || S.inp.service.by || {}; return { M: by.M >= 1 ? by.M : n, E: by.E >= 1 ? by.E : n, N: by.N >= 1 ? by.N : n, X: by.X >= 1 ? by.X : n, Y: by.Y >= 1 ? by.Y : n }; }
+  function perDayS(svc) { var b = nByS(); if (svc.layout) { var t = 0; svc.layout.forEach(function (r) { t += b[r.code]; }); return t; } return b.M + (svc.H >= 16 ? b.E : 0) + (svc.H === 24 ? b.N : 0); }
+  // fairness is shown as a percentile among the valid rosters the tool built; the raw index only ranks them
+  function pctOfCand(ctx, cand) { if (cand.pct === undefined || cand.pct === null) { var p = null; try { p = RM.poolPct(ctx, cand); } catch (e) { p = null; } cand.pct = p; } return cand.pct; }
+  function fairTxt(ctx, cand) { var p = pctOfCand(ctx, cand); return p === null || p === undefined ? 'Fairness index ' + cand.an.score : 'Fairness: ' + RM.pctText(p); }
+  function fairShort(ctx, cand) { var p = pctOfCand(ctx, cand); return p === null || p === undefined ? String(cand.an.score) : RM.pctText(p).replace(' percentile', ''); }
+  function nightOnlyS() { var sv = svcObj(); return !!(sv && RM.nightOnly(sv)); }
+  function noWomenStep() { return nightOnlyS() || (!!S.inp.team.touched && S.inp.team.women === 0); }
+  function shiftSummary() { var sv = svcObj(); if (!sv) return ''; var rows = sv.layout || RM.defaultLayout(sv.H, sv.pair); return rows.map(function (r) { return RM.LABEL_NAME[r.label] + ' ' + r.hours + ' h'; }).join(' + ') + ', first starts ' + S.inp.prev.firstStart; }
+  function nLabel() { var svc = svcObj(), b = nByS(); if (!svc) return S.inp.service.n + ' per shift'; var codes = svc.layout ? svc.layout.map(function (r) { return r.code; }) : svc.H === 8 ? ['M'] : svc.H === 16 ? ['M', 'E'] : ['M', 'E', 'N']; var same = codes.every(function (c) { return b[c] === b[codes[0]]; }); return same ? b[codes[0]] + ' per shift' : codes.map(function (c) { return RM.outCode(c) + ' ' + b[c]; }).join(' · '); }
   function periodDays() {
     var a = RM.dateFromISO(S.inp.period.start), b = RM.dateFromISO(S.inp.period.end);
     if (!a || !b || b < a) return 0;
@@ -2464,10 +2627,10 @@ if (typeof module !== 'undefined') module.exports = RM;
     var i = S.inp, wf = i.team.women > 0 ? womenFit() : null;
     if (wf && !wf.impossible) { i.prev.firstStart = wf.firstStart; i.prev.auto = wf; }
     return {
-      today: TODAY, service: { svc: i.service.svc, pair: i.service.pair, n: i.service.n, by: nByS() }, period: { start: i.period.start, end: i.period.end },
+      today: TODAY, service: { svc: i.service.svc, pair: i.service.pair, n: i.service.n, by: nByS(), layout: i.service.layout || null }, period: { start: i.period.start, end: i.period.end },
       team: { men: i.team.men, women: i.team.women, headcount: i.team.headcount, menNames: i.team.menNames, womenNames: i.team.womenNames },
       holidays: { list: i.holidays.list, mode: i.holidays.mode }, weekoffs: { perPerson: i.weekoffs.perPerson }, leaves: validLeaves(), plannedOffs: validPlan(), fixed: validFixed(),
-      women: { start: i.women.start, end: i.women.end }, prev: { firstStart: i.prev.firstStart, states: i.prev.states }, rules: Object.assign({}, i.rules)
+      women: nightOnlyS() ? { start: '', end: '' } : { start: i.women.start, end: i.women.end }, prev: { firstStart: i.prev.firstStart, states: i.prev.states }, rules: Object.assign({}, i.rules)
     };
   }
   function validLeaves() {
@@ -2502,7 +2665,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     try { out = out.concat(overlapIssues(S.inp.leave.list.filter(function (l) { return l.from; }), 'Leave', false), overlapIssues(S.inp.plan.list.filter(function (l) { return l.from; }), 'Planned week-off', true)); } catch (e) { }
     try {
       var cx = RM.buildContext(engineInput());
-      cx.forceCnt.forEach(function (n, i) { if (n > cx.extraOffs) out.push({ step: 'holidays', field: 'Planned week-offs', msg: cx.people[i].name + ' has ' + n + ' planned week-offs but only ' + cx.extraOffs + ' week-offs in this period. Remove some or raise the week-offs.' }); });
+      cx.forceCnt.forEach(function (n, i) { if (n > cx.extraOffs) out.push({ step: 'holidays', field: 'Planned week-offs', msg: cx.people[i].name + ' has ' + n + ' planned week-off' + (n === 1 ? '' : 's') + ', but each person gets ' + Math.max(0, cx.extraOffs) + ' week-off' + (cx.extraOffs === 1 ? '' : 's') + ' in this period (Step 7, Week-offs and working days). Raise the week-offs per person in Step 7, or remove some planned week-offs.' }); });
       cx.fixErr.forEach(function (m) { out.push({ step: 'fixed', field: 'Fixed shifts', msg: m }); });
       // a planned week-off must fit the rules: the run of week-offs, and the working days left around it
       cx.people.forEach(function (pp, i) {
@@ -2519,7 +2682,7 @@ if (typeof module !== 'undefined') module.exports = RM;
           return n;
         }
         var avail = cx.extraOffs - cx.forceCnt[i];
-        if (need(10) > avail) {
+        if (avail >= 0 && need(10) > avail) {
           var fix = null;
           out.push({ step: 'rules', field: 'Planned week-offs vs rules', msg: pp.name + ': with these planned week-offs only ' + avail + ' more week-off' + (avail === 1 ? ' is' : 's are') + ' left, but even with 10 working days in a row (the highest allowed) it needs ' + need(10) + '. No roster is possible. Give more week-offs per person, or shorten the planned week-off.' });
         }
@@ -2599,8 +2762,8 @@ if (typeof module !== 'undefined') module.exports = RM;
   }
   function userSays(text) { /* answers live in the saved-inputs panel; no echo bubble in the stage layout */ }
   function stepIdx(id) { for (var i = 0; i < STEPS.length; i++) if (STEPS[i].id === id) return i; return -1; }
-  function prevStepId(id) { var i = id === 'review' ? STEPS.length : stepIdx(id); i--; while (i >= 0 && STEPS[i].id === 'women' && S.inp.team.women === 0) i--; return i >= 0 ? STEPS[i].id : null; }
-  function nextStepAfter(id) { var i = stepIdx(id) + 1; while (i < STEPS.length && STEPS[i].id === 'women' && S.inp.team.women === 0) i++; return i < STEPS.length ? STEPS[i].id : null; }
+  function prevStepId(id) { var i = id === 'review' ? STEPS.length : stepIdx(id); i--; while (i >= 0 && STEPS[i].id === 'women' && noWomenStep()) i--; return i >= 0 ? STEPS[i].id : null; }
+  function nextStepAfter(id) { var i = stepIdx(id) + 1; while (i < STEPS.length && STEPS[i].id === 'women' && noWomenStep()) i++; return i < STEPS.length ? STEPS[i].id : null; }
   function goBack() {
     if (S.running) return;
     var cur = S.active, p = prevStepId(cur); if (!p) return;
@@ -2637,7 +2800,7 @@ if (typeof module !== 'undefined') module.exports = RM;
   function summary(id) {
     var i = S.inp, svc = svcObj(), T = RM.teamSize(svc, nByS()), c = calcDays();
     switch (id) {
-      case 'service': return { v: i.service.svc + ' · ' + nLabel(), s: (i.team.headcount ? 'Team of ' + i.team.headcount + ' · ' : '') + 'Suggested team: ' + T.N + ' people', m: T.thin ? 'Thin backup: plan leave cover' : '' };
+      case 'service': return { v: i.service.svc + ' · ' + nLabel(), s: shiftSummary() + ' · ' + (i.team.headcount ? 'Team of ' + i.team.headcount + ' · ' : '') + 'Suggested team: ' + T.N + ' people', m: T.thin ? 'Thin backup: plan leave cover' : '' };
       case 'period': return { v: RM.prettyDate(i.period.start) + ' to ' + RM.prettyDate(i.period.end), s: c.D + ' days' };
       case 'team': {
         var tot = i.team.men + i.team.women;
@@ -2653,7 +2816,7 @@ if (typeof module !== 'undefined') module.exports = RM;
       }
       case 'fixed': {
         var fl = validFixed();
-        return fl.length ? { v: fl.length + ' fixed shift' + (fl.length > 1 ? 's' : ''), s: fl.map(function (f) { return f.name + ': ' + f.shift + (f.from || f.to ? ' ' + (f.from || '') + (f.to && f.to !== f.from ? ' to ' + f.to : '') : ''); }).join(' · ') } : { v: 'No fixed shifts', s: 'Everyone rotates' };
+        return fl.length ? { v: fl.length + ' fixed shift' + (fl.length > 1 ? 's' : ''), s: fl.map(function (f) { return f.name + ': ' + String(f.shift).replace(/\+/g, ' or ') + (f.from || f.to ? ' ' + (f.from || '') + (f.to && f.to !== f.from ? ' to ' + f.to : '') : ''); }).join(' · ') } : { v: 'No fixed shifts', s: 'Everyone rotates' };
       }
       case 'leave': {
         var lv = validLeaves();
@@ -2663,11 +2826,12 @@ if (typeof module !== 'undefined') module.exports = RM;
       }
       case 'weekoffs': return { v: c.W + ' week-offs per person', s: c.working + ' working days each · ' + (c.dayH * c.working) + ' h target' };
       case 'women':
-        if (i.team.women === 0) return { v: 'Not needed', s: 'No female in the team' };
+        if (nightOnlyS()) return { v: 'Not needed', s: 'Every shift is a night shift. Female nights are from home, with a male in the office as backup.' };
+        if (i.team.touched && i.team.women === 0) return { v: 'Not needed', s: 'No female in the team' };
         return { v: i.women.start + ' to ' + i.women.end, s: 'Office shifts for female stay inside this window. Nights are from home.' };
       case 'prev':
         if (i.prev.mode === 'file') return { v: Object.keys(i.prev.states).length + ' people carried over', s: (i.prev.sources.length + (i.prev.paste.trim() ? 1 : 0)) + ' source(s) · first service start ' + i.prev.firstStart };
-        return { v: 'No previous roster', s: 'First service starts at ' + i.prev.firstStart + '. All balances start at 0.' };
+        return { v: 'No previous roster', s: 'All balances start at 0.' };
       case 'rules': {
         var r = i.rules, def = RM.DEFAULT_RULES;
         var custom = Object.keys(def).some(function (k) { return k !== 'shiftEdits' && r[k] !== def[k]; }) || !!r.shiftEdits;
@@ -2680,7 +2844,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     var body = $('#panelBody'), n = 0;
     body.replaceChildren();
     STEPS.forEach(function (st) {
-      var done = !!S.done[st.id]; if (done) n++;
+      var done = !!S.done[st.id] || (st.id === 'women' && noWomenStep() && !!S.done.prev); if (done) n++;
       var sm = done ? summary(st.id) : null;
       var isNow = !done && st.id === nextStep();
       var it = h('div', { class: 'item ' + (done ? 'done' : 'pending' + (isNow ? ' now' : ' locked')) + (S.active === st.id ? ' active' : '') },
@@ -2699,7 +2863,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     $('#progBar').style.width = (100 * n / STEPS.length) + '%';
     var nav = $('#stepNav');
     if (nav) {
-      var shownSteps = STEPS.filter(function (s) { return !(s.id === 'women' && S.inp.team.women === 0); });
+      var shownSteps = STEPS.filter(function (s) { return !(s.id === 'women' && noWomenStep()); });
       fill(nav, shownSteps.map(function (s, k) {
         var done = !!S.done[s.id], act = S.active === s.id;
         var el = h(done && !act ? 'button' : 'div', { class: 'sn' + (done ? ' done' : '') + (act ? ' act' : ''), type: done && !act ? 'button' : null, 'aria-current': act ? 'step' : null, title: s.label },
@@ -2771,7 +2935,7 @@ if (typeof module !== 'undefined') module.exports = RM;
 
   /* ---------- steps: ask / widgets ---------- */
   var ASK = {
-    service: "Let's start with the service. Which service hours does the team cover, and how many people are needed on the Morning, Evening and Night shifts?",
+    service: "Let's start with the service. Which service hours does the team cover, how many shifts is the day split into, how long is each, and how many people does each need?",
     period: 'Which dates should the roster cover? I have filled in a full month. Change it if you need a part month.',
     team: "How big is the team, and how many male and female? Below you can see which sizes and splits can build a roster.",
     fixed: 'Does anyone always work the same shift? Pick the person and the shift. Everyone else rotates.',
@@ -2779,12 +2943,12 @@ if (typeof module !== 'undefined') module.exports = RM;
     weekoffs: 'How many week-offs does each person get in this period?',
     leave: 'Does anyone have planned leave in this period? Add it here and I will plan the roster around it, and show who covers the shifts. If nobody is on leave, just continue.',
     women: "Now the female shift window. You decide the times, nothing is assumed. Their office duties must sit inside it. Their night shift is always from home, and a male is always on the office post at night.",
-    prev: "Do you have the previous roster? Upload it (any number of files) so rest and night rules carry over. If not, tell me when service starts.",
+    prev: "Do you have the previous roster? Upload it (any number of files) so rest and night rules carry over. If not, choose No previous roster and everything starts fresh.",
     rules: 'Last one: rest and duty limits. The defaults follow the Support Roster Rules. Change only what you need.'
   };
 
   var TITLE = {
-    service: ['Which service does the team cover?', 'Pick the service hours and how many people are needed on the Morning, Evening and Night shifts.'],
+    service: ['Which service does the team cover?', 'Pick the service hours, split the day into shifts, and say how many people each shift needs.'],
     period: ['Which dates should the roster cover?', 'A full month is filled in. Change it if you need a part month.'],
     team: ['How big is the team?', 'Set the number of male and female, or pick a row below. Each row says whether a roster can be built for that team.'],
     fixed: ['Does anyone work a fixed shift?', 'Optional. A person on a fixed shift works only that shift on their working days. Everyone else rotates around them.'],
@@ -2792,7 +2956,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     weekoffs: ['How many week-offs does each person get?', 'Everyone gets exactly this many in the period. I suggest numbers that fit your team.'],
     leave: ['Does anyone have planned leave?', 'I plan the roster around it and show who covers the shifts.'],
     women: ["What is the female shift window?", 'It only matters if the team has female. Their office duties must sit inside it. Their night shift is always from home, and a male is always on the office post at night.'],
-    prev: ['Do you have the previous roster?', 'Upload it so rest and night rules carry over. If not, tell me when service starts.'],
+    prev: ['Do you have the previous roster?', 'Upload it so rest and night rules carry over. If not, choose No previous roster and everything starts fresh.'],
     rules: ['Rest and duty limits', 'The defaults follow the Support Roster Rules. Change only what you need.']
   };
   function setQ(id) { var t = TITLE[id] || [ASK[id], null]; S.question = t[0]; S.lead = (S.lead && id === 'service') ? S.lead : t[1]; }
@@ -2805,7 +2969,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     S.nav = false; S.backTarget = null; S.editing = true; S.active = id; renderPanel();
     setQ(id); showWidget(WIDGETS[id]());
   }
-  function nextStep() { for (var i = 0; i < STEPS.length; i++) if (!S.done[STEPS[i].id]) return STEPS[i].id; return null; }
+  function nextStep() { for (var i = 0; i < STEPS.length; i++) { if (STEPS[i].id === 'women' && noWomenStep()) continue; if (!S.done[STEPS[i].id]) return STEPS[i].id; } return null; }
   function advance() {
     S.active = null; renderPanel();
     var n = nextStep();
@@ -2834,85 +2998,131 @@ if (typeof module !== 'undefined') module.exports = RM;
 
   /* service */
   WIDGETS.service = function () {
-    var w = { svc: S.inp.service.svc, pair: S.inp.service.pair || 'ME', n: S.inp.service.n, by: nByS(S.inp.service.n, S.inp.service.by), hc: S.inp.team.headcount };
-    var byBox = h('div', { class: 'bybox' }), pairBox = h('div', { class: 'pairbox' });
-    var est = h('div', { class: 'est' }), cap = h('div', { class: 'capbox' }), chips;
+    var sv0 = S.inp.service;
+    var w = { svc: sv0.svc, pair: sv0.pair || 'ME', n: sv0.n, by: nByS(sv0.n, sv0.by), hc: S.inp.team.headcount, fs: S.inp.prev.firstStart, fsTouched: !!S.inp.prev.startTouched };
+    var NAMES = RM.LABEL_NAME;
+    function H() { var s = RM.parseService(w.svc); return s ? s.H : 24; }
+    function defaultK(hh) { return hh === 24 ? 3 : hh === 16 ? 2 : 1; }
+    // a sensible split of the service hours: night 8 h if there is one, the rest shared evenly in half-hour steps
+    function rowsFor(hh, k) {
+      var labs = k === 1 ? ['M'] : k === 2 ? ['M', 'E'] : k === 3 ? (hh === 24 ? ['M', 'E', 'N'] : ['M', 'A', 'E']) : k === 4 ? (hh === 24 ? ['M', 'A', 'E', 'N'] : ['M', 'A', 'E', 'L']) : (hh === 24 ? ['M', 'A', 'E', 'L', 'N'] : ['R', 'M', 'A', 'E', 'L']);
+      var hrs = labs.map(function () { return 0; }), left = hh, ni = labs.indexOf('N');
+      if (ni >= 0) { hrs[ni] = Math.min(8, left); left -= hrs[ni]; }
+      var idx = []; labs.forEach(function (l, i) { if (i !== ni) idx.push(i); });
+      idx.forEach(function (i, j) { var share = Math.floor(left / (idx.length - j) * 2) / 2; hrs[i] = share; left -= share; });
+      return labs.map(function (l, i) { return { label: l, hours: hrs[i] }; });
+    }
+    function codeOf(i) { if (w.rows[i].label === 'N') return 'N'; var c = 0; for (var j = 0; j < i; j++) if (w.rows[j].label !== 'N') c++; return ['M', 'E', 'X', 'Y'][c]; }
+    w.rows = sv0.layout && sv0.layout.length ? sv0.layout.map(function (r) { return { label: r.label, hours: r.hours }; }) : RM.defaultLayout(H(), w.pair).map(function (r) { return { label: r.label, hours: r.hours }; });
+    function svcNow() { var hh = H(), lg = RM.legacyOf(hh, w.rows), s = RM.parseService(w.svc, lg ? lg.pair : w.pair, lg ? null : w.rows); RM.setPair(s); return s; }
+    function layoutText() { return w.rows.map(function (r) { return NAMES[r.label] + ' ' + r.hours + ' h'; }).join(' + '); }
+    var rowsBox = h('div', { class: 'shrows' }), kBox = h('div'), totalBox = h('div', { class: 'shtotal' }), timeEls = [];
+    var cap = h('div', { class: 'capbox' }), chips;
+    var fsIn = h('input', { type: 'time', id: 'f-fs', value: w.fs });
+    fsIn.addEventListener('input', function () { w.fs = fsIn.value; w.fsTouched = true; paintTimes(); });
+    function resetFs() { if (w.fsTouched) return; try { var s = svcNow(); w.fs = RM.fmtHM(RM.defaultFirstStart(s)); fsIn.value = w.fs; } catch (e) { /* keep */ } }
     var hc = numInput({ id: 'f-hc0', placeholder: 'Optional', value: w.hc }, 2);
     hc.addEventListener('input', function () { w.hc = hc.value === '' ? '' : Math.max(0, parseInt(hc.value, 10) || 0); paintCap(); });
+    function setService(sv) {
+      w.svc = sv; var hh = H(); w.rows = rowsFor(hh, defaultK(hh)); resetFs(); paintK(); paintRows(); paintCap();
+    }
     // what can this headcount run? every service, 1 to 4 people on each shift
     function paintCap() {
-      var H = Number(w.hc);
-      if (!H || H < 2) { fill(cap); return; }
+      var Hc = Number(w.hc);
+      if (!Hc || Hc < 2) { fill(cap); return; }
       var head = h('tr', null, h('th', null, 'Service hours'), [1, 2, 3, 4].map(function (n) { return h('th', { class: 'num' }, n + ' per shift'); }));
       var body = RM.SERVICES.map(function (sv) {
         var svc = RM.parseService(sv);
         return h('tr', null, h('td', null, h('b', null, sv), h('small', { style: 'display:block;color:var(--muted)' }, svc.H + ' h a day, ' + svc.dpw + ' days a week')),
           [1, 2, 3, 4].map(function (n) {
-            var T = RM.teamSize(svc, n), possible = 5 * H >= T.shiftsWeek && H >= 2, comfy = H >= T.N, spare = Math.round(4.35 * (5 * H - T.shiftsWeek));
+            var T = RM.teamSize(svc, n), possible = 5 * Hc >= T.shiftsWeek && Hc >= 2, comfy = Hc >= T.N, spare = Math.round(4.35 * (5 * Hc - T.shiftsWeek));
             var cls = comfy ? 'ok' : possible ? 'warn' : 'bad', txt = comfy ? 'Yes' : possible ? 'Tight' : 'No';
             var sel = w.svc === sv && w.n === n;
-            return h('td', { class: 'num' }, h('button', { type: 'button', class: 'pill ' + cls, style: 'cursor:pointer;' + (sel ? 'outline:2px solid var(--accent,#2b3fcf)' : ''), title: 'Needs ' + T.N + ' people for a comfortable roster; ' + H + ' people give ' + (5 * H) + ' duty days a week against ' + T.shiftsWeek + ' needed. Click to choose.', 'aria-label': sv + ', ' + n + ' per shift: ' + txt + ', needs ' + T.N + ' people', onclick: function () { w.svc = sv; w.n = n; w.by = { M: n, E: n, N: n }; chips.paint(); paint(); paintCap(); } }, txt + ' · ' + (possible ? (spare >= 0 ? spare : 0) + ' spare' : 'needs ' + T.N)));
+            return h('td', { class: 'num' }, h('button', { type: 'button', class: 'pill ' + cls, style: 'cursor:pointer;' + (sel ? 'outline:2px solid var(--accent,#2b3fcf)' : ''), title: 'Needs ' + T.N + ' people for a comfortable roster; ' + Hc + ' people give ' + (5 * Hc) + ' duty days a week against ' + T.shiftsWeek + ' needed. Click to choose.', 'aria-label': sv + ', ' + n + ' per shift: ' + txt + ', needs ' + T.N + ' people', onclick: function () { w.n = n; w.by = { M: n, E: n, N: n, X: n, Y: n }; if (w.svc !== sv) setService(sv); chips.paint(); paintRows(); paintCap(); } }, txt + ' · ' + (possible ? (spare >= 0 ? spare : 0) + ' spare' : 'needs ' + T.N)));
           }));
       });
-      fill(cap, h('div', { class: 'big' }, 'What a team of ' + H + ' can run'),
+      fill(cap, h('div', { class: 'big' }, 'What a team of ' + Hc + ' can run'),
         h('div', { class: 'scroll' }, h('table', { class: 'tbl' }, h('thead', null, head), h('tbody', null, body))),
         h('div', { class: 'hint' }, 'Yes = enough people with spare days for leave. Tight = every duty is covered but with little or no spare cover. No = not enough duty days. The number is the spare duty days a month, or the team size needed. This counts people only. The male and female split and the female window are checked in the Team step. Click a cell to choose it.'));
     }
-    function paint() {
-      var svc = RM.parseService(w.svc), T = RM.teamSize(svc, nByS(w.n, w.by));
-      paintBy();
-      fill(est,
-        h('div', { class: 'estrow' },
-          h('div', { class: 'estnum' }, String(T.N)),
-          h('div', null, h('div', { class: 'big' }, 'people suggested for this service'), h('div', { class: 'sub' }, T.monitors + ' on monitor duty + 1 extra for the general shift and leave cover'))),
-        T.thin ? h('div', { class: 'note warn' }, 'Only ' + T.spare + ' spare days a month. Plan a temporary resource during leave. Do not add a permanent person.') : null,
-        h('details', { class: 'how' }, h('summary', null, 'How is this calculated?'),
-          h('ol', null,
-            h('li', null, 'Shifts to fill each week = ' + T.perDay + ' people a day (' + ['M', 'E', 'N'].slice(0, T.k).map(function (c) { return c + ' ' + T.nBy[c]; }).join(', ') + ') × ' + svc.dpw + ' days = ' + T.shiftsWeek + '.'),
-            h('li', null, 'One person works 5 days a week, so ' + T.shiftsWeek + ' ÷ 5 = ' + Math.floor(T.shiftsWeek / 5) + ' monitors (rounded down).'),
-            h('li', null, 'Plus 1 extra person for the general shift and leave cover = ' + T.N + (T.tlShort > 0 ? '. This extra person also covers the ' + T.tlShort + ' shift' + (T.tlShort > 1 ? 's' : '') + ' a week that is left over.' : '.')),
-            h('li', null, 'Spare days a month = ' + T.spare + '. These are the extra days available to cover leave.'))));
+    function paintK() {
+      var hh = H(), opts = (hh === 24 ? [3, 4, 5] : [1, 2, 3, 4, 5].filter(function (n) { return n * 4 <= hh && n * 10 >= hh; })).map(function (n) { return { value: n, label: String(n) }; });
+      fill(kBox, chipGroup(opts, function () { return w.rows.length; }, function (v) { w.rows = rowsFor(hh, v); resetFs(); paintRows(); }, true).el);
     }
-    chips = chipGroup(RM.SERVICES.map(function (s) { return { value: s, label: s }; }), function () { return w.svc; }, function (v) { w.svc = v; paint(); paintCap(); }, true);
-    function paintPair() {
-      var sv = RM.parseService(w.svc);
-      if (!sv || (sv.H !== 16 && sv.H !== 8)) { fill(pairBox); return; }
-      var list = sv.H === 16 ? RM.PAIR16 : RM.PAIR8;
-      if (list.indexOf(w.pair) < 0) w.pair = list[0];
-      var g = chipGroup(list.map(function (k) { return { value: k, label: RM.PAIR_LABEL[k] }; }), function () { return w.pair; }, function (v) { w.pair = v; paint(); paintCap(); }, false);
-      fill(pairBox, field(sv.H === 16 ? 'Which two shifts run?' : 'Which shift runs?', g.el, sv.H === 16 ? 'A 16-hour service covers two of the three shifts, back to back. Pick the two the client needs. A night shift in the pair counts toward the nights-in-a-row limit.' : 'An 8-hour service runs one shift. Pick the one the client needs. A night shift counts toward the nights-in-a-row limit.'));
+    function paintTimes() {
+      var hh = H(), k = w.rows.length, fsMin = RM.parseHM(w.fs), sh = null, svc = null;
+      try { svc = svcNow(); if (fsMin !== null && !(svc && svc.layoutErr)) sh = RM.buildShifts(svc, fsMin, null, 30); } catch (e) { sh = null; }
+      w.rows.forEach(function (r, i) {
+        var el = timeEls[i]; if (!el) return;
+        var c = codeOf(i), x = sh && sh[c];
+        el.textContent = x ? RM.fmtHM(x.start) + ' to ' + RM.fmtHM(x.start + x.len) + ' · ' + (Math.round(x.len / 6) / 10) + ' h on duty' : '';
+      });
+      var total = 0; w.rows.forEach(function (r) { total += Number(r.hours) || 0; });
+      total = Math.round(total * 100) / 100;
+      var used = {}, dup = null; w.rows.forEach(function (r) { if (used[r.label]) dup = r.label; used[r.label] = 1; });
+      var ok = Math.abs(total - hh) < 0.001 && !dup;
+      fill(totalBox, h('span', { class: 'pill ' + (ok ? 'ok' : 'bad') }, 'Shift hours: ' + total + ' of ' + hh + ' h'),
+        h('span', { class: 'hint' }, dup ? ' ' + NAMES[dup] + ' is chosen twice. Each shift can be used once.' : Math.abs(total - hh) < 0.001 ? ' The shifts cover the whole service day.' : ' The hours must add up to the service hours (' + hh + ' h).'));
+      var why = checkSave(ok, total, hh);
+      if (ok && why) totalBox.append(h('div', { class: 'hint', style: 'color:var(--bad,#b3261e);margin-top:4px' }, why));
     }
-    function paintBy() {
-      var svc = RM.parseService(w.svc, w.pair); RM.setPair(svc); paintPair();
-      var codes = svc && svc.H === 8 ? ['M'] : svc && svc.H === 16 ? ['M', 'E'] : ['M', 'E', 'N'], names = { M: 'Morning', E: 'Evening', N: 'Night' }, b = nByS(w.n, w.by); if (svc && (svc.H === 16 || svc.H === 8)) names = { M: SN('M'), E: SN('E') };
-      fill(byBox, h('div', { class: 'grid2' }, codes.map(function (c) {
-        var f = numInput({ id: 'f-by' + c, value: b[c], 'aria-label': names[c] + ' shift people' }, 1);
-        f.addEventListener('change', function () { var v = parseInt(f.value, 10); w.by[c] = isNaN(v) || v < 1 ? 1 : Math.min(9, v); w.n = w.by.M; paint(); paintCap(); });
-        return field(names[c] + ' shift', f);
-      })), h('div', { class: 'hint' }, 'How many people must be on duty on each shift, every day.'));
+    var saveBtn = h('button', { class: 'btn', type: 'button', onclick: function () { saveService(); } }, 'Save and continue');
+    function checkSave(ok, total, hh) {
+      var bad = '';
+      if (!ok) bad = 'The shift hours must add up to ' + hh + ' h.';
+      else if (w.rows.some(function (r) { return !(Number(r.hours) > 0); })) bad = 'Every shift needs hours above 0.';
+      else if (w.rows.some(function (r) { return r.label !== 'N' && Number(r.hours) < 4; })) bad = 'Every shift must be at least 4 hours.';
+      else if (w.rows.some(function (r) { return r.label !== 'N' && Number(r.hours) > 10; })) bad = 'A shift can be at most 10 hours.';
+      else if (w.rows.some(function (r) { return r.label === 'N' && (Number(r.hours) < 8 || Number(r.hours) > 11); })) bad = 'The night shift must be between 8 and 11 hours.';
+      else { try { var sv = svcNow(); if (sv && sv.layoutErr) bad = sv.layoutErr; } catch (e) { /* engine decides on save */ } }
+      saveBtn.disabled = !!bad; saveBtn.title = bad; return bad;
     }
-    paint(); paintCap();
+    function paintRows() {
+      var hh = H(), k = w.rows.length; timeEls = [];
+      fill(rowsBox, w.rows.map(function (r, i) {
+        var code = codeOf(i), opts = hh === 24 ? (i === k - 1 ? ['N'] : ['R', 'M', 'A', 'E', 'L']) : ['R', 'M', 'A', 'E', 'L', 'N'];
+        var lab = chipGroup(opts.map(function (l) { return { value: l, label: NAMES[l] }; }), function () { return r.label; }, function (v) { r.label = v; resetFs(); paintTimes(); nightNotes(); }, false);
+        var hi = numInput({ id: 'f-shh' + i, value: r.hours, 'aria-label': 'Hours of shift ' + (i + 1) }, 5, true);
+        hi.addEventListener('input', function () { var v = parseFloat(String(hi.value).replace(',', '.')); r.hours = isNaN(v) ? 0 : v; paintTimes(); });
+        var pi = numInput({ id: 'f-by' + code, value: w.by[code], 'aria-label': 'People on shift ' + (i + 1) }, 1);
+        pi.addEventListener('change', function () { var v = parseInt(pi.value, 10); w.by[code] = isNaN(v) || v < 1 ? 1 : Math.min(9, v); pi.value = w.by[code]; if (i === 0) w.n = w.by.M; });
+        var te = h('div', { class: 'shtime' }); timeEls.push(te);
+        var note = h('div', { class: 'note warn shnote', hidden: r.label !== 'N' }, 'Night shift must be between 8 and 11 hours.');
+        r._note = note;
+        return h('div', { class: 'shrow' },
+          h('div', { class: 'shhead' }, h('b', null, 'Shift ' + (i + 1)), te),
+          lab.el,
+          h('div', { class: 'grid2' }, field('Hours', hi), field('People on this shift', pi)),
+          note);
+      }));
+      paintTimes();
+    }
+    function nightNotes() { w.rows.forEach(function (r) { if (r._note) r._note.hidden = r.label !== 'N'; }); }
+    chips = chipGroup(RM.SERVICES.map(function (s) { return { value: s, label: s }; }), function () { return w.svc; }, function (v) { setService(v); }, true);
+    paintK(); paintRows(); paintCap();
     var box = errBox();
     return card('Service', [
       field('Service hours', chips.el, 'Hours per day x days per week. 24x7 means round the clock, every day.'),
-      pairBox,
-      byBox,
+      field('How many shifts a day?', kBox, 'Every shift is 4 to 10 hours, so only the shift counts that fit the service hours are shown. A 24-hour service needs 3 to 5, and the last one is the night shift.'),
+      rowsBox, totalBox,
+      field('First shift starts at', fsIn, 'The shifts run one after another from this time. Each shift after the first starts 30 minutes early for the handover, so its duty is 30 minutes longer.'),
       field('Team size, people you have (optional)', hc, 'Fill this to see which service hours and how many people per shift this team can run.'),
       cap,
       box,
-      h('div', { class: 'actions' },
-        h('button', { class: 'btn', type: 'button', onclick: function () { saveService(); } }, 'Save and continue'),
-        h('button', { class: 'link', type: 'button', id: 'updRoster', onclick: function () { openUpdateFlow(); } }, 'I already have a roster, update it for a leave'))]);
+      h('div', { class: 'actions' }, saveBtn)]);
     function saveService() {
-          S.inp.service.svc = w.svc; S.inp.service.pair = w.pair; S.inp.service.n = w.by.M; S.inp.service.by = Object.assign({}, w.by);
-          S.inp.team.headcount = w.hc === '' || !w.hc ? '' : Number(w.hc);
-          var errs = RM.validateInputs(engineInput()).filter(function (e) { return e.step === 'service'; });
-          if (errs.length) return showErrs(box, errs);
-          var svc = RM.parseService(w.svc, w.pair); RM.setPair(svc);
-          if (!S.inp.prev.startTouched) S.inp.prev.firstStart = RM.fmtHM(RM.defaultFirstStart(svc));
-          if (!S.inp.weekoffs.touched) S.inp.weekoffs.perPerson = defaultWeekoffs();
-          if (!S.inp.team.touched) { var NN = (S.inp.team.headcount || RM.teamSize(svc, nByS(w.n, w.by)).N), wo0 = Math.min(NN - 1, Math.floor((NN - 1) / 2)); if (svc.H === 24 && NN - wo0 < 1) wo0 = NN - 1; S.inp.team.men = NN - wo0; S.inp.team.women = wo0; }
-          save('service', w.svc + ', ' + nLabel() + (S.inp.team.headcount ? ', team of ' + S.inp.team.headcount : ''));
+      var hh = H(), lg = RM.legacyOf(hh, w.rows);
+      S.inp.service.svc = w.svc; S.inp.service.layout = lg ? null : w.rows.map(function (r) { return { label: r.label, hours: Number(r.hours) || 0 }; });
+      S.inp.service.pair = lg && lg.pair ? lg.pair : (hh === 8 ? 'M' : 'ME');
+      S.inp.service.n = w.by.M; S.inp.service.by = Object.assign({}, w.by);
+      S.inp.team.headcount = w.hc === '' || !w.hc ? '' : Number(w.hc);
+      S.inp.prev.firstStart = w.fs; S.inp.prev.startTouched = w.fsTouched;
+      var errs = RM.validateInputs(engineInput()).filter(function (e) { return e.step === 'service'; });
+      if (errs.length) return showErrs(box, errs);
+      var svc = svcObj();
+      if (!S.inp.weekoffs.touched) S.inp.weekoffs.perPerson = defaultWeekoffs();
+      /* the suggested team size is shown in the Team step only as a guide; the user picks the team */
+      save('service', w.svc + ' (' + layoutText() + '), ' + nLabel() + (S.inp.team.headcount ? ', team of ' + S.inp.team.headcount : ''));
     }
   };
 
@@ -2921,16 +3131,19 @@ if (typeof module !== 'undefined') module.exports = RM;
     var w = { start: S.inp.period.start, end: S.inp.period.end };
     var info = h('div', { class: 'hint' }), box = errBox();
     var si = h('input', { type: 'date', id: 'f-start', value: w.start, min: TODAY }), ei = h('input', { type: 'date', id: 'f-end', value: w.end, min: w.start > TODAY ? w.start : TODAY });
+    var monthBtns = [];
     function paint() {
       var a = RM.dateFromISO(w.start), b = RM.dateFromISO(w.end);
+      monthBtns.forEach(function (mb) { mb.el.setAttribute('aria-pressed', String(mb.r[0] === w.start && mb.r[1] === w.end)); });
       info.textContent = a && b && b >= a ? (RM.daysBetween(a, b) + 1) + ' days: ' + RM.DOW[a.getUTCDay()] + ' ' + RM.prettyDate(w.start) + ' to ' + RM.DOW[b.getUTCDay()] + ' ' + RM.prettyDate(w.end) : '';
     }
     si.addEventListener('input', function () { w.start = si.value; ei.min = si.value > TODAY ? si.value : TODAY; paint(); }); ei.addEventListener('input', function () { w.end = ei.value; paint(); });
     var months = [];
     for (var k = 0; k < 4; k++) { var d = new Date(Date.UTC(now.getFullYear(), now.getMonth() + k, 1)); months.push({ y: d.getUTCFullYear(), m: d.getUTCMonth(), cur: k === 0 }); }
     var chips = h('div', { class: 'chips' }, months.map(function (mo) {
-      var r = monthRange(mo.y, mo.m);
-      return h('button', { type: 'button', class: 'chip', onclick: function () { w.start = r[0]; w.end = r[1]; si.value = r[0]; ei.value = r[1]; ei.min = r[0]; paint(); } }, RM.MONTHS[mo.m] + ' ' + mo.y);
+      var r = monthRange(mo.y, mo.m), el0;
+      el0 = h('button', { type: 'button', class: 'chip', 'aria-pressed': String(r[0] === w.start && r[1] === w.end), onclick: function () { w.start = r[0]; w.end = r[1]; si.value = r[0]; ei.value = r[1]; ei.min = r[0]; paint(); } }, RM.MONTHS[mo.m] + ' ' + mo.y);
+      monthBtns.push({ el: el0, r: r }); return el0;
     }));
     paint();
     return card('Roster dates', [
@@ -2949,30 +3162,31 @@ if (typeof module !== 'undefined') module.exports = RM;
 
   /* team */
   WIDGETS.team = function () {
-    var t = S.inp.team, w = { men: t.men, women: t.women, headcount: t.headcount, menNames: t.menNames.join(', '), womenNames: t.womenNames.join(', ') };
+    var t = S.inp.team, w = { men: t.touched ? t.men : null, women: t.touched ? t.women : null, headcount: t.headcount, menNames: t.menNames.join(', '), womenNames: t.womenNames.join(', ') };
     var est = h('div', { class: 'est' }), box = errBox(), mbox = h('div');
     var svc = svcObj(), T = RM.teamSize(svc, nByS());
     var menS, womenS;
     function paint() {
-      var tot = w.men + w.women; paintSplits(); if (typeof paintFeas === 'function' && feasRows && feasRows.length) paintFeas();
-      var cls = tot === T.N ? 'ok' : tot < T.N ? 'warn' : 'warn';
-      fill(est, 
-        h('div', { class: 'big' }, 'Team of ' + tot + '  ·  suggested ' + T.N),
-        h('div', { class: 'note ' + cls }, tot === T.N ? 'Matches the smallest team that can do the job.' : tot < T.N ? 'Below the suggested size. I will still try, and tell you if no roster fits.' : 'More than the suggested size. I will build the roster and report that the smallest-team rule is missed.'));
+      var tot = (w.men || 0) + (w.women || 0); paintSplits(); if (typeof paintFeas === 'function' && feasRows && feasRows.length) paintFeas();
+      fill(est,
+        h('div', { class: 'big' }, tot ? 'Team of ' + tot : 'Choose your team'),
+        h('div', { class: 'hint' }, 'For reference, the smallest team that can do this job is ' + T.N + ' people, for example ' + sugg[0] + ' male + ' + sugg[1] + ' female. This is only a guide, you decide the team.'));
+      if (curBox) checkCur();
     }
-    menS = stepper(w.men, 0, 40, function (v) { w.men = v; paint(); }, 'f-men');
-    womenS = stepper(w.women, 0, 40, function (v) { w.women = v; paint(); }, 'f-women');
+    var sugg = splitFor(T.N);
+    menS = stepper(w.men === null ? '' : w.men, 0, 40, function (v) { w.men = v; paint(); }, 'f-men');
+    womenS = stepper(w.women === null ? '' : w.women, 0, 40, function (v) { w.women = v; paint(); }, 'f-women');
     var splits = h('div', { class: 'chips' }), sizes = h('div', { class: 'chips' });
-    function splitFor(sz) { var wo = Math.min(sz - 1, Math.floor((sz - 1) / 2)); if (svc.H === 24 && sz - wo < 1) wo = sz - 1; return [sz - wo, wo]; }
+    function splitFor(sz) { var wo = Math.min(sz - 1, Math.floor((sz - 1) / 2)); if (RM.hasNight(svc) && sz - wo < 1) wo = sz - 1; return [sz - wo, wo]; }
     function paintSplits() {
-      var tot = w.men + w.women; fill(splits);
+      var tot = (w.men || 0) + (w.women || 0); fill(splits);
       for (var wm = 0; wm <= tot; wm++) (function (women) {
-        var men = tot - women; if (svc.H === 24 && men < 1) return;
-        splits.append(h('button', { type: 'button', class: 'chip', 'aria-pressed': String(men === w.men), onclick: function () { menS.set(men); womenS.set(women); } }, men + ' male + ' + women + ' female'));
+        var men = tot - women; if (RM.hasNight(svc) && men < 1) return;
+        splits.append(h('button', { type: 'button', class: 'chip', 'aria-pressed': String(men === (w.men || 0)), onclick: function () { menS.set(men); womenS.set(women); } }, men + ' male + ' + women + ' female'));
       })(wm);
     }
     for (var sz = Math.max(2, T.N - 1); sz <= T.N + 2; sz++) (function (size) {
-      sizes.append(h('button', { type: 'button', class: 'chip', onclick: function () { var sp = splitFor(size); menS.set(sp[0]); womenS.set(sp[1]); } }, size + ' people' + (size === T.N ? ' (suggested)' : size < T.N ? ' (below)' : ' (extra)')));
+      sizes.append(h('button', { type: 'button', class: 'chip', onclick: function () { var sp = splitFor(size); menS.set(sp[0]); womenS.set(sp[1]); } }, size + ' people'));
     })(sz);
     var hc = numInput({ id: 'f-hc', placeholder: 'Optional', value: w.headcount }, 2);
     hc.addEventListener('input', function () { w.headcount = hc.value; });
@@ -2985,7 +3199,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     function comboRows() {
       var out = [];
       for (var size = Math.max(2, T.N - 1); size <= T.N + 2; size++) for (var wm = 0; wm <= size; wm++) {
-        var men = size - wm; if (svc.H === 24 && men < 1) continue;
+        var men = size - wm; if (RM.hasNight(svc) && men < 1) continue;
         out.push({ size: size, men: men, women: wm, state: 'wait', note: '', fair: null, tr: null });
       }
       return out;
@@ -3017,17 +3231,16 @@ if (typeof module !== 'undefined') module.exports = RM;
       })();
     }
     function paintFeas() {
-      var cur = w.men + ':' + w.women;
-      var head = h('tr', null, h('th', null, 'Team'), h('th', null, 'Roster'), h('th', { class: 'num' }, 'Fairness'), h('th', null, ''));
+      var cur = (w.men || 0) + ':' + (w.women || 0);
+      var head = h('tr', null, h('th', null, 'Team'), h('th', null, 'Roster'), h('th', null, ''));
       var body = [], lastSize = null;
       feasRows.forEach(function (r) {
-        if (r.size !== lastSize) { lastSize = r.size; body.push(h('tr', { class: 'grp ' + (r.size === T.N ? 'g-sug' : r.size < T.N ? 'g-low' : 'g-ext') }, h('td', { colspan: 4 }, r.size + ' people' + (r.size === T.N ? ' (suggested)' : r.size < T.N ? ' (below suggested)' : ' (extra)')))); }
+        if (r.size !== lastSize) { lastSize = r.size; body.push(h('tr', { class: 'grp g-plain' }, h('td', { colspan: 3 }, r.size + ' people', h('span', { class: 'tag', style: 'margin-left:8px' }, r.size < T.N ? 'below suggested' : r.size === T.N ? 'suggested' : (r.size - T.N) + ' extra')))); }
         var pill = r.state === 'wait' ? h('span', { class: 'pill n' }, 'Waiting') : r.state === 'run' ? h('span', { class: 'pill n' }, 'Checking…') : r.state === 'ok' ? h('span', { class: 'pill ok' }, 'Roster possible') : r.state === 'none' ? h('span', { class: 'pill warn' }, 'None found') : h('span', { class: 'pill bad' }, 'Not possible');
         var isCur = r.men + ':' + r.women === cur;
         var tr = h('tr', { class: isCur ? 'cur' : '' },
           h('td', null, r.men + ' male + ' + r.women + ' female'),
           h('td', null, pill, r.note ? h('small', { class: 'why' }, r.note) : null),
-          h('td', { class: 'num' }, r.fair === null ? '–' : String(Math.round(r.fair))),
           h('td', null, isCur ? h('span', { class: 'hint' }, 'Selected') : r.state === 'ok' ? h('button', { class: 'link usebtn', type: 'button', onclick: function () { menS.set(r.men); womenS.set(r.women); } }, 'Use') : null));
         r.tr = tr; body.push(tr);
       });
@@ -3047,18 +3260,40 @@ if (typeof module !== 'undefined') module.exports = RM;
         setTimeout(function () { quickCheck(r, function () { paintFeas(); setTimeout(next, 0); }); }, 20);
       })();
     }
-    setTimeout(runFeas, 50);
+    feasBox.hidden = true;
+    var feasBtn = h('button', { class: 'btn ghost small', type: 'button', onclick: function () { feasBox.hidden = false; feasBtn.hidden = true; runFeas(); } }, 'Show all possible team combinations');
+    /* does the team the user typed work? checked in the background, Save stays off until it passes */
+    var curBox = h('div', { class: 'curchk', 'aria-live': 'polite' }), curTok = {}, curState = { key: '', state: 'none', note: '' }, saveBtn2, curTimer = null;
+    function setSave() { if (saveBtn2) { saveBtn2.disabled = curState.state !== 'ok'; saveBtn2.title = curState.state === 'ok' ? '' : (curState.note || 'Pick a team that can build a roster.'); } }
+    function checkCur() {
+      var men = w.men || 0, women = w.women || 0, key = men + ':' + women, my = curTok = {};
+      clearTimeout(curTimer);
+      if (men + women < 2) { curState = { key: key, state: 'pick', note: 'Choose the number of male and female. A team needs at least 2 people.' }; fill(curBox, h('div', { class: 'hint' }, curState.note)); setSave(); return; }
+      if (RM.hasNight(svc) && men < 1) { curState = { key: key, state: 'no', note: 'A service with a night shift needs at least one male for the office post at night.' }; fill(curBox, h('div', { class: 'note bad' }, curState.note)); setSave(); return; }
+      curState = { key: key, state: 'run', note: 'Checking this team…' }; fill(curBox, h('div', { class: 'hint' }, 'Checking if this team can build a roster…')); setSave();
+      curTimer = setTimeout(function () {
+        var r = { size: men + women, men: men, women: women, state: 'wait', note: '', fair: null, tr: null };
+        quickCheck(r, function () {
+          if (my !== curTok) return;
+          if (r.state === 'ok') { curState = { key: key, state: 'ok', note: '' }; fill(curBox, h('div', { class: 'note ok' }, men + ' male + ' + women + ' female can build a roster.')); }
+          else { curState = { key: key, state: r.state, note: (r.state === 'no' ? 'This team cannot cover all the shifts. ' : 'No roster could be built with this team. ') + (r.note || '') }; fill(curBox, h('div', { class: 'note bad' }, curState.note + ' Change the team, or use "Show all possible team combinations" to see what works.')); }
+          setSave();
+        });
+      }, 350);
+    }
+    setTimeout(checkCur, 0);
     function names(s) { return s.split(',').map(function (x) { return x.trim(); }).filter(Boolean); }
     return card('Team', [
       h('div', { class: 'grid2' }, field('Male', menS.el), field('Female', womenS.el)),
-      est,
+      est, curBox,
+      h('div', { class: 'actions' }, feasBtn),
       feasBox,
       h('details', { class: 'more' }, h('summary', null, 'Optional: client headcount and names'),
         h('div', { class: 'grid2', style: 'margin-top:10px' }, field('Client headcount', hc, 'If filled, male + female must match it.'), field('Male names', mn, 'Comma separated'), field('Female names', wn, 'Comma separated'))),
       box, mbox,
-      h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', onclick: function () {
+      h('div', { class: 'actions' }, saveBtn2 = h('button', { class: 'btn', type: 'button', onclick: function () {
         var prev = JSON.stringify(S.inp.team);
-        S.inp.team = { men: w.men, women: w.women, headcount: w.headcount === '' ? '' : Number(w.headcount), menNames: names(w.menNames), womenNames: names(w.womenNames), touched: true };
+        S.inp.team = { men: w.men || 0, women: w.women || 0, headcount: w.headcount === '' ? '' : Number(w.headcount), menNames: names(w.menNames), womenNames: names(w.womenNames), touched: true };
         var errs = RM.validateInputs(engineInput()).filter(function (e) { return e.step === 'team'; });
         if (errs.length) { S.inp.team = JSON.parse(prev); return showErrs(box, errs); }
         if (S.inp.prev.mode === 'file') {
@@ -3070,15 +3305,9 @@ if (typeof module !== 'undefined') module.exports = RM;
           }
         }
         mbox.replaceChildren();
-        var go = this, men0 = w.men, women0 = w.women, label = men0 + ' male and ' + women0 + ' female';
-        go.disabled = true; go.textContent = 'Checking this team…';
-        var r = { size: men0 + women0, men: men0, women: women0, state: 'wait', note: '', fair: null, tr: null };
-        quickCheck(r, function () {
-          go.disabled = false; go.textContent = 'Save and continue';
-          if (r.state === 'ok') { showErrs(box, []); save('team', label); return; }
-          S.inp.team = JSON.parse(prev);
-          showErrs(box, [{ step: 'team', field: 'Team', msg: (r.state === 'no' ? 'This team cannot build a roster: ' : 'No roster could be built with this team: ') + label + '. ' + (r.note || '') + ' Pick a team marked "Roster possible" in the table above.' }]);
-        });
+        var label = (w.men || 0) + ' male and ' + (w.women || 0) + ' female';
+        if (curState.state !== 'ok') { S.inp.team = JSON.parse(prev); showErrs(box, [{ step: 'team', field: 'Team', msg: curState.note || 'Pick a team that can build a roster.' }]); return; }
+        showErrs(box, []); save('team', label);
       } }, 'Save and continue'))]);
   };
 
@@ -3284,8 +3513,8 @@ if (typeof module !== 'undefined') module.exports = RM;
     var saveBtn = { textContent: '' };
     paint();
     return h('div', null, [
-      h('div', { class: 'grid2' }, h('div', { class: 'field', style: 'grid-column:1/-1' }, h('label', null, 'Who'), btnSelect(who)), field('From', from), field('To (last day of leave)', to, 'Leave only the same day? Leave this empty.'), field('Reason', why)),
-      h('div', { class: 'actions' }, addBtn, h('span', { class: 'hint' }, 'Press Add leave for each person. If you forget, I add the filled-in dates when you continue.')),
+      h('div', { class: 'grid2' }, h('div', { class: 'field', style: 'grid-column:1/-1' }, h('label', null, 'Who'), btnSelect(who)), field('From', from), field('To (last day)', to, 'Leave only the same day? Leave this empty.'), field('Reason', why)),
+      h('div', { class: 'addrow' }, addBtn, h('div', { class: 'hint' }, 'Press Add leave for each person. If you forget, I add the filled-in dates when you continue.')),
       listEl, box, notes,
       h('details', { class: 'more' }, h('summary', null, 'How is leave handled?'),
         h('div', { class: 'hint', style: 'margin-top:8px;line-height:1.5' }, 'The person is off duty on those days. Leave days count as rest. Their week-offs are reduced by the leave days (e.g. 6 week-offs and 4 leave days: 2 week-offs), but never below what the 6-days-in-a-row and night-rest rules need. If the leave is longer than the week-offs it replaces, the others give up a week-off each where needed. The roster summary shows every week-off change. Their shifts are shared by the rest of the team, and the rest, night and week-off rules still apply to everyone. Their hours target is lowered by the leave days. In the roster, leave shows as L, people who take over the shift are ringed, and a Leave cover table lists who covers what.'))]);
@@ -3337,7 +3566,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     paint();
     return h('div', null, [
       h('div', { class: 'grid2' }, h('div', { class: 'field', style: 'grid-column:1/-1' }, h('label', null, 'Who'), btnSelect(who)), field('From', from), field('To (last day)', to, 'Only one day? Leave this empty.'), field('Reason', why)),
-      h('div', { class: 'actions' }, h('button', { class: 'btn ghost small', type: 'button', onclick: function () { if (!from.value) { showErrs(box, [{ field: 'From date', msg: 'Pick the first day.' }]); return; } addPending(); } }, 'Add week-off'), h('span', { class: 'hint' }, 'Press Add week-off for each one. If you forget, I add the filled-in dates when you continue.')),
+      h('div', { class: 'addrow' }, h('button', { class: 'btn ghost small', type: 'button', onclick: function () { if (!from.value) { showErrs(box, [{ field: 'From date', msg: 'Pick the first day.' }]); return; } addPending(); } }, 'Add week-off'), h('div', { class: 'hint' }, 'Press Add week-off for each one. If you forget, I add the filled-in dates when you continue.')),
       listEl, box, notes,
       h('details', { class: 'more' }, h('summary', null, 'How are planned week-offs handled?'),
         h('div', { class: 'hint', style: 'margin-top:8px;line-height:1.5' }, 'The person is off on exactly those days. Each one counts as one of their week-offs, so the rest of their week-offs are placed around them. This is different from leave, which reduces the week-offs. The roster is built so everyone else still gets covered.'))]);
@@ -3347,9 +3576,16 @@ if (typeof module !== 'undefined') module.exports = RM;
   WIDGETS.fixed = function () {
     var F = S.inp.fixed, box = errBox(), listEl = h('div', { class: 'lvlist' }), status = h('div'), notes = h('div');
     var names = teamNames(), svc = svcObj(), fs = RM.parseHM(S.inp.prev.firstStart), sh = RM.buildShifts(svc, fs === null ? 420 : fs, S.inp.rules.shiftEdits);
-    var codes = ['M', 'E', 'N', 'NB', 'G'].filter(function (c) { return sh[c]; });
+    var codes = ['M', 'E', 'X', 'Y', 'N', 'G'].filter(function (c) { return sh[c]; });
     var who = h('select', { id: 'f-fxwho' }, names.map(function (n) { return h('option', { value: n }, n); }));
-    var shiftSel = h('select', { id: 'f-fxshift' }, codes.map(function (c) { return h('option', { value: c }, RM.outCode(c) + ' · ' + SN(c) + ' ' + RM.fmtHM(sh[c].start) + '–' + RM.fmtHM(sh[c].start + sh[c].len)); }));
+    var pick = [], shiftBox = h('div', { class: 'chips', id: 'f-fxshift', role: 'group' });
+    function fxText(f) { var cs = String(f.shift).split(/[+,\/ ]+/).filter(Boolean); return cs.length > 1 ? 'only ' + cs.map(function (c) { return RM.outCode(c); }).join(' or ') + ' (never the other shifts)' : 'fixed on ' + RM.outCode(cs[0]) + ' (' + SN(cs[0]) + ')'; }
+    function paintPick() {
+      fill(shiftBox, codes.map(function (c) {
+        return h('button', { type: 'button', class: 'chip', 'aria-pressed': String(pick.indexOf(c) >= 0), onclick: function () { var ix = pick.indexOf(c); if (ix >= 0) pick.splice(ix, 1); else pick.push(c); paintPick(); } }, RM.outCode(c) + ' · ' + SN(c) + ' ' + RM.fmtHM(sh[c].start) + '–' + RM.fmtHM(sh[c].start + sh[c].len));
+      }));
+    }
+    paintPick();
     var per0 = S.inp.period, fxFrom = h('input', { type: 'date', id: 'f-fxfrom', min: per0.start, max: per0.end, value: '' }), fxTo = h('input', { type: 'date', id: 'f-fxto', min: per0.start, max: per0.end, value: '' });
     function fxWhen(f) { return f.from || f.to ? ' from ' + (f.from || per0.start) + ' to ' + (f.to || f.from || per0.end) : ' for the whole period'; }
     var tok = {};
@@ -3378,8 +3614,9 @@ if (typeof module !== 'undefined') module.exports = RM;
     function paint() {
       fill(listEl, F.list.map(function (f, i) {
         var ok = names.indexOf(f.name) >= 0;
-        return h('div', { class: 'lv' }, h('div', null, h('b', null, f.name), ' · fixed on ' + RM.outCode(f.shift) + ' (' + SN(f.shift) + ')' + fxWhen(f), ok ? null : h('small', null, 'This person is not in the team any more, so this is ignored.')),
-          h('button', { class: 'link', type: 'button', 'aria-label': 'Remove fixed shift of ' + f.name, onclick: function () { F.list.splice(i, 1); paint(); if (!box.hidden) showErrs(box, constraintIssues('fixed')); } }, 'Remove'));
+        return h('div', { class: 'lv' }, h('div', null, h('b', null, f.name), ' · ' + fxText(f) + fxWhen(f), ok ? null : h('small', null, 'This person is not in the team any more, so this is ignored.')),
+          h('div', { style: 'display:flex;gap:12px;flex:none' }, h('button', { class: 'link', type: 'button', 'aria-label': 'Change fixed shift of ' + f.name, onclick: function () { who.value = f.name; who.dispatchEvent(new Event('change')); pick = String(f.shift).split('+').filter(function (c) { return codes.indexOf(c) >= 0; }); fxFrom.value = f.from || ''; fxTo.value = f.to || ''; F.list.splice(i, 1); paintPick(); paint(); } }, 'Change'),
+          h('button', { class: 'link', type: 'button', 'aria-label': 'Remove fixed shift of ' + f.name, onclick: function () { F.list.splice(i, 1); paint(); if (!box.hidden) showErrs(box, constraintIssues('fixed')); } }, 'Remove')));
       }));
       listEl.hidden = !F.list.length;
       saveBtn.textContent = F.list.length ? 'Save fixed shifts and continue' : 'No fixed shifts, continue';
@@ -3391,25 +3628,26 @@ if (typeof module !== 'undefined') module.exports = RM;
       if (b && !a) a = b;
       if (a && b && b < a) { showErrs(box, [{ step: 'fixed', field: 'Dates', msg: 'The end date is before the start date.' }]); return; }
       if (a && (a < per0.start || a > per0.end) || b && (b < per0.start || b > per0.end)) { showErrs(box, [{ step: 'fixed', field: 'Dates', msg: 'Pick dates inside the roster period (' + per0.start + ' to ' + per0.end + ').' }]); return; }
+      if (!pick.length) { showErrs(box, [{ step: 'fixed', field: 'Shift', msg: 'Pick at least one shift the person can work.' }]); return; }
       box.hidden = true;
       // a new entry replaces any older entry of the same person that overlaps its dates
       var lo = a || per0.start, hi = b || (a ? a : per0.end);
       F.list = F.list.filter(function (f) { if (f.name !== who.value) return true; var flo = f.from || per0.start, fhi = f.to || (f.from ? f.from : per0.end); return fhi < lo || flo > hi; });
-      F.list.push({ id: S.uid++, name: who.value, shift: shiftSel.value, from: a, to: b }); paint();
+      F.list.push({ id: S.uid++, name: who.value, shift: pick.join('+'), from: a, to: b }); paint();
       var ci = constraintIssues('fixed'); if (ci.length) showErrs(box, ci);
     }
     var saveBtn = h('button', { class: 'btn', type: 'button', onclick: function () {
       var errs = constraintIssues('fixed');
       if (errs.length) return showErrs(box, errs);
       var fl = validFixed();
-      save('fixed', fl.length ? fl.map(function (f) { return f.name + ' fixed on ' + f.shift + (f.from || f.to ? ' (' + (f.from || '') + (f.to && f.to !== f.from ? ' to ' + f.to : '') + ')' : ''); }).join(', ') : 'No fixed shifts');
+      save('fixed', fl.length ? fl.map(function (f) { return f.name + (String(f.shift).indexOf('+') >= 0 ? ' only ' : ' fixed on ') + String(f.shift).replace(/\+/g, ' or ') + (f.from || f.to ? ' (' + (f.from || '') + (f.to && f.to !== f.from ? ' to ' + f.to : '') + ')' : ''); }).join(', ') : 'No fixed shifts');
     } }, 'No fixed shifts, continue');
     paint();
     return card('Fixed shifts', [
-      h('div', { class: 'grid2' }, h('div', { class: 'field', style: 'grid-column:1/-1' }, h('label', null, 'Who'), btnSelect(who)), h('div', { class: 'field', style: 'grid-column:1/-1' }, h('label', null, 'Always works'), btnSelect(shiftSel))),
+      h('div', { class: 'grid2' }, h('div', { class: 'field', style: 'grid-column:1/-1' }, h('label', null, 'Who'), btnSelect(who)), h('div', { class: 'field', style: 'grid-column:1/-1' }, h('label', null, 'Can work (pick one or more)'), shiftBox, h('div', { class: 'hint' }, 'Pick one shift to fix the person on it. Pick several (for example Evening and Night) and the person gets only those, never the shifts you left out.'))),
       h('div', { class: 'grid2' }, field('From date (optional)', fxFrom), field('To date (optional)', fxTo)),
       h('div', { class: 'hint', style: 'margin-bottom:6px' }, 'Leave both dates empty to fix the shift for the whole roster period. One date alone means just that day.'),
-      h('div', { class: 'actions' }, h('button', { class: 'btn ghost small', type: 'button', onclick: addOne }, 'Add fixed shift'), h('span', { class: 'hint' }, 'The same person can have different shifts on different dates. A new entry replaces an overlapping older one.')),
+      h('div', { class: 'addrow' }, h('button', { class: 'btn ghost small', type: 'button', onclick: addOne }, 'Add fixed shift'), h('div', { class: 'hint' }, 'The same person can have different shifts on different dates. A new entry replaces an overlapping older one.')),
       listEl, notes, status, box,
       h('details', { class: 'more' }, h('summary', null, 'How are fixed shifts handled?'),
         h('div', { class: 'hint', style: 'margin-top:8px;line-height:1.5' }, 'A person on a fixed shift works only that shift on their working days and keeps all their week-offs. A fixed night is not limited to the usual nights in a row, but the other rest rules still apply. Everyone else rotates around them and covers their week-offs. People on a fixed shift are left out of the fairness comparison of nights and weekends, because their pattern is chosen. Female can only be fixed on a shift that fits the female window.')),
@@ -3447,7 +3685,7 @@ if (typeof module !== 'undefined') module.exports = RM;
   WIDGETS.holidays = function () {
     var H = S.inp.holidays, box = errBox();
     var listEl = h('div', { class: 'files' }), chipsEl = h('div', { class: 'hl' }), modeBox = h('div');
-    var drop = h('label', { class: 'drop', for: 'f-hfiles' }, h('div', null, h('b', null, 'Drop holiday files here'), ' or tap to choose'), h('div', { class: 'hint' }, 'CSV (date,name) or YAML. Add as many files as you like. Each one can be removed again.'));
+    var drop = h('label', { class: 'drop', for: 'f-hfiles' }, h('div', null, h('b', null, 'Drop holiday files here'), ' or '), h('span', { class: 'btn ghost small dropbtn' }, 'Choose files'), h('div', { class: 'hint' }, 'CSV (date,name) or YAML. Add as many files as you like. Each one can be removed again.'));
     var fi = h('input', { type: 'file', id: 'f-hfiles', multiple: true, accept: '.csv,.yaml,.yml,.txt', hidden: true });
     function addFiles(fl) {
       var arr = Array.prototype.slice.call(fl);
@@ -3527,7 +3765,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     }
     function woFit(opt) {
       var c = calcDays(), svc = svcObj(), P = S.inp.team.men + S.inp.team.women, open = c.D - c.closed;
-      var perDay = perDayS(svc) + (svc.H === 24 && S.inp.team.women > 0 && S.inp.rules.nbMode === 'always' ? 1 : 0);
+      var perDay = perDayS(svc) + (RM.hasNight(svc) && S.inp.team.women > 0 && S.inp.rules.nbMode === 'always' ? 1 : 0);
       var W = Math.max(opt, c.closed), need = perDay * open, have = P * (open - (W - c.closed)) - leaveExtra(W);
       return { W: W, spare: have - need };
     }
@@ -3562,7 +3800,7 @@ if (typeof module !== 'undefined') module.exports = RM;
         c.holIn > c.holOpen ? h('div', { class: 'hint' }, (c.holIn - c.holOpen) + ' holiday(s) fall on closed days and are not counted twice.') : null);
       // capacity hint
       var tmp = { svc: S.inp.service, team: S.inp.team };
-      var P = S.inp.team.men + S.inp.team.women, open = c.D - c.closed, perDay = perDayS(svc) + (svc.H === 24 && S.inp.team.women > 0 && S.inp.rules.nbMode === 'always' ? 1 : 0);
+      var P = S.inp.team.men + S.inp.team.women, open = c.D - c.closed, perDay = perDayS(svc) + (RM.hasNight(svc) && S.inp.team.women > 0 && S.inp.rules.nbMode === 'always' ? 1 : 0);
       var need = perDay * open, lvTot = 0; validLeaves().forEach(function (l) { lvTot += leaveDays(l); }); var have = P * (open - (c.W - c.closed)) - leaveExtra(c.W);
       fill(cap, need > have
         ? h('div', { class: 'note bad' }, 'Not enough capacity: ' + need + ' duty-days are needed and ' + P + ' people give ' + have + (lvTot ? ' after ' + lvTot + ' leave day' + (lvTot > 1 ? 's' : '') : '') + '. Lower the week-offs or add a person.')
@@ -3595,7 +3833,7 @@ if (typeof module !== 'undefined') module.exports = RM;
       var useStart = wf && !wf.impossible ? RM.parseHM(wf.firstStart) : (fs === null ? 420 : fs);
       var sh = RM.buildShifts(svc, useStart, S.inp.rules.shiftEdits);
       function fitsW(x) { var st = x.start % 1440; return (st >= a && st + x.len <= b) || (st + 1440 >= a && st + 1440 + x.len <= b); }
-      var widen = ['M', 'E'].filter(function (c) { return sh[c] && !fitsW(sh[c]); }).map(function (c) {
+      var widen = ['M', 'E', 'X', 'Y'].filter(function (c) { return sh[c] && !fitsW(sh[c]); }).map(function (c) {
         var x = sh[c], st = RM.fmtHM(x.start), en = RM.fmtHM(x.start + x.len);
         return h('button', { type: 'button', class: 'chip mono', onclick: function () { w.start = st; w.end = en; si.value = st; ei.value = en; paint(); } }, 'Widen window to ' + st + '–' + en);
       });
@@ -3626,8 +3864,6 @@ if (typeof module !== 'undefined') module.exports = RM;
   WIDGETS.prev = function () {
     var P = S.inp.prev, box = errBox();
     var out = h('div', { class: 'files' }), sw = {};
-    var fs = h('input', { type: 'time', id: 'f-fs', value: P.firstStart });
-    fs.addEventListener('input', function () { P.firstStart = fs.value; P.startTouched = true; paintFiles(); });
     var fileBox = h('div', { class: 'field' }), seg;
     var fi = h('input', { type: 'file', id: 'f-pfiles', multiple: true, accept: '.csv,.json,.txt,.xlsx', hidden: true });
     var drop = h('label', { class: 'drop', for: 'f-pfiles' }, h('div', null, h('b', null, 'Drop previous roster files here'), ' or tap to choose'), h('div', { class: 'hint' }, 'JSON, CSV or Excel (.xlsx) exported from an earlier run. Add several files if the history is split.'));
@@ -3674,7 +3910,6 @@ if (typeof module !== 'undefined') module.exports = RM;
     setMode(P.mode);
     return card('Previous roster', [
       seg, fileBox,
-      field('First service start time', fs, 'Used for the shift times. With a previous roster it is still used to place the shifts. Default for this service: ' + RM.fmtHM(RM.defaultFirstStart(svcObj())) + '.'),
       box,
       h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', onclick: function () {
         var errs = RM.validateInputs(engineInput()).filter(function (e) { return e.step === 'prev'; }).concat(prevIssues());
@@ -3701,10 +3936,10 @@ if (typeof module !== 'undefined') module.exports = RM;
       var cur = edits[c] || { start: RM.fmtHM(base[c].start), len: base[c].len / 60 };
       var ti = h('input', { type: 'time', id: 'f-sh-' + c, value: cur.start }), li = numInput({ id: 'f-shl-' + c, value: cur.len }, 4, true);
       shiftInputs[c] = { ti: ti, li: li, base: base[c] };
-      sg.append(h('span', { class: 'sw c-' + c, style: 'width:auto;padding:2px 8px;justify-self:start' }, RM.outCode(c) + ' · ' + SN(c)), ti, li);
+      sg.append(h('span', { class: 'sw c-' + RM.outCode(c), style: 'width:auto;padding:2px 8px;justify-self:start' }, RM.outCode(c) + ' · ' + SN(c)), ti, li);
     });
     var nbSel = null, nbBtn = null;
-    if (svc.H === 24 && S.inp.team.women > 0) {
+    if (RM.hasNight(svc) && S.inp.team.women > 0) {
       nbSel = h('select', { id: 'f-nb' }, h('option', { value: 'always' }, 'Backup (a male in the office) every night (default)'), h('option', { value: 'whenWomen' }, 'No backup when a male works the night in the office, backup only when a female works the night from home'), h('option', { value: 'none' }, 'No night backup at all'));
       nbSel.value = w.nbMode; nbSel.addEventListener('change', function () { w.nbMode = nbSel.value; });
       nbBtn = btnSelect(nbSel, 'stack');
@@ -3806,7 +4041,7 @@ if (typeof module !== 'undefined') module.exports = RM;
   function swatch(c) { /* c is a display letter */
     return h('span', { class: 'sw c-' + c }, c === 'NB' || c === 'NBW' ? 'B' : c === 'OFF' ? '–' : c === 'LV' ? 'L' : c); }
   function legend(ctx) {
-    return h('div', { class: 'legend' }, ['M', 'E', 'N', 'NB', 'G', 'OFF'].filter(function (c) { return !ctx || ctx.shifts[c] || c === 'OFF'; }).map(function (c) { return h('span', null, swatch(RM.outCode(c)), SN(c)); }), (is16() ? null : h('span', null, h('span', { class: 'sw', style: 'border:1px solid var(--line)' }, 'h'), 'Night from home')), ctx && ctx.shifts.EW ? h('span', null, h('span', { class: 'sw var' }, 'M'), 'Timing changes because a female has the evening') : null, ctx && ctx.leaveN ? h('span', null, swatch('LV'), 'Planned leave') : null, ctx && ctx.forceCnt && ctx.forceCnt.some(function (n) { return n > 0; }) ? h('span', null, h('span', { class: 'sw pwsw' }, '–'), 'Planned week-off (asked for)') : null, ctx && ctx.leaveN ? h('span', null, h('span', { class: 'sw cov' }), 'Takes over a shift from someone on leave') : null);
+    return h('div', { class: 'legend' }, ['M', 'E', 'X', 'Y', 'N', 'NB', 'G', 'OFF'].filter(function (c) { return !ctx || ctx.shifts[c] || c === 'OFF'; }).map(function (c) { return h('span', null, swatch(RM.outCode(c)), SN(c)); }), (is16() ? null : h('span', null, h('span', { class: 'sw', style: 'border:1px solid var(--line)' }, 'h'), 'Night from home')), ctx && ctx.shifts.EW ? h('span', null, h('span', { class: 'sw var' }, 'M'), 'Timing changes because a female has the evening') : null, ctx && ctx.leaveN ? h('span', null, swatch('LV'), 'Planned leave') : null, ctx && ctx.forceCnt && ctx.forceCnt.some(function (n) { return n > 0; }) ? h('span', null, h('span', { class: 'sw pwsw' }, '–'), 'Planned week-off (asked for)') : null, ctx && ctx.leaveN ? h('span', null, h('span', { class: 'sw cov' }), 'Takes over a shift from someone on leave') : null);
   }
   function miniMap(ctx, cand) {
     return h('div', { class: 'mini', 'aria-hidden': 'true' }, cand.grid.map(function (row) {
@@ -3962,7 +4197,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     apply.addEventListener('click', function () { onApply(plan); });
     return h('article', { class: 'plan' + (idx === 0 ? ' best' : '') },
       h('div', { class: 'ph' }, h('b', null, (idx === 0 ? 'Best: ' : 'Option ' + (idx + 1) + ': ') + (small ? 'quick swap' : 'bigger re-plan')),
-        h('span', { class: 'pill n' }, plan.changes.length + ' change' + (plan.changes.length === 1 ? '' : 's')), h('span', { class: 'pill n' }, plan.people + ' ' + (plan.people === 1 ? 'person' : 'people') + ' affected'), h('span', { class: 'score' }, 'Fairness ' + plan.an.score)),
+        h('span', { class: 'pill n' }, plan.changes.length + ' change' + (plan.changes.length === 1 ? '' : 's')), h('span', { class: 'pill n' }, plan.people + ' ' + (plan.people === 1 ? 'person' : 'people') + ' affected'), h('span', { class: 'score' }, fairTxt(ctx0, plan))),
       covered.length ? h('ul', { class: 'cv' }, covered.slice(0, 6).map(function (t) { return h('li', null, t); })) : h('div', { class: 'hint' }, 'That day was a week-off, so no shift needs cover.'),
       plan.changes.length ? h('details', null, h('summary', null, 'See every change (' + plan.changes.length + ')'), h('div', { class: 'scroll' }, h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ['Date', 'Who', 'Was', 'Now'].map(function (t) { return h('th', null, t); }))), tb)), plan.changes.length > 40 ? h('div', { class: 'hint' }, 'First 40 shown. The roster grid has all of them.') : null) : null,
       h('div', { class: 'actions' }, apply));
@@ -4094,7 +4329,7 @@ if (typeof module !== 'undefined') module.exports = RM;
         h('div', null, h('h4', null, 'Hard rules: all ' + cand.hard.length + ' passed'), ruleList(cand.hard, true)),
         h('div', null, h('h4', null, 'Soft rules: ' + cand.soft.filter(function (s) { return s.pass; }).length + ' of ' + cand.soft.length + ' met'), ruleList(cand.soft, false))),
       h('div', null, h('h4', null, 'How the fairness score works'),
-        h('div', { class: 'hint' }, 'Score = 30% night share + 25% weekends and holidays + 20% shift mix + 15% rest pattern + 10% steady pattern. Each part is 100 minus the relative gap between the busiest and lightest person.')),
+        h('div', { class: 'hint' }, 'The percentile shows where this roster stands among all the valid rosters the tool built for your inputs. 90th percentile means it is fairer than 90 of every 100 of them. Behind it, an internal index is worked out from the night share, weekends and holidays, shift mix, rest pattern and steady pattern, and the rosters are ranked by that index. Index = 30% night share + 25% weekends and holidays + 20% shift mix + 15% rest pattern + 10% steady pattern. Each part is 100 minus the relative gap between the busiest and lightest person.')),
       h('div', null, h('h4', null, 'How the numbers were worked out'),
         h('div', { class: 'fx' }, [
           T.formula, T.tlFormula, T.spareFormula,
@@ -4193,8 +4428,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     }
     var t0 = function (c) { var x = ctx.shifts[c]; return RM.fmtHM(x.start) + '–' + RM.fmtHM(x.start + x.len); };
     var notes = [];
-    notes.push(SN('M') + ' ' + t0('M') + '.');
-    if (has('E')) notes.push(SN('E') + ' ' + t0('E') + '.');
+    ['M', 'E', 'X', 'Y'].forEach(function (c) { if (ctx.shifts[c]) notes.push(SN(c) + ' ' + t0(c) + '.'); });
     if (has('N')) notes.push('Night monitor ' + t0('N') + ', from home' + (ctx.rules.nbMode === 'always' ? '' : ' for female, office for male') + (ctx.rules.nbMode === 'none' && ctx.nW > 0 ? '. No night backup.' : '.'));
     if (has('NB')) notes.push('Night backup ' + t0('NB') + ', a male in the office all night.');
     if (has('EW')) notes.push('On a day a female takes the evening: Morning ' + (has('MW') ? t0('MW') : t0('M')) + ', Female evening ' + t0('EW') + ' (inside the female window ' + RM.fmtHM(ctx.ws) + '–' + RM.fmtHM(ctx.we) + '), Night monitor ' + t0('NW') + ' (home), Night backup ' + t0('NBW') + ' (office male). The morning after such a day is male only, ' + t0('MA') + '.');
@@ -4229,7 +4463,7 @@ if (typeof module !== 'undefined') module.exports = RM;
   }
   function inputRows(ctx, seedLabel) {
     var i = S.inp, c = calcDays();
-    return [['Input', 'Value'], ['Service', i.service.svc], ['Resources per shift (n)', nLabel()], ['Period', i.period.start + ' to ' + i.period.end], ['Male', i.team.men], ['Female', i.team.women], ['Suggested team size', ctx.team.N], ['Week-offs per person', c.W], ['Holidays in period', c.holIn], ["Female window", ctx.nW ? i.women.start + ' to ' + i.women.end : 'n/a'], ['First service start', i.prev.firstStart], ['Minimum rest (h)', i.rules.minRestH], ['Max nights in a row', i.rules.maxNights], ['Max working days in a row', i.rules.maxWork], ['Max week-offs in a row', i.rules.maxOffRun], ['Longest duty (h)', i.rules.maxDutyH], ['Handover overlap (min)', i.rules.overlapMin], ['Planned leave', ctx.inp.leaves && ctx.inp.leaves.length ? ctx.inp.leaves.map(function (l) { return l.name + ' ' + l.from + (l.to !== l.from ? ' to ' + l.to : '') + (l.reason ? ' (' + l.reason + ')' : ''); }).join('; ') : 'None'], ['Planned week-offs', ctx.inp.plannedOffs && ctx.inp.plannedOffs.length ? ctx.inp.plannedOffs.map(function (l) { return l.name + ' ' + l.from + (l.to !== l.from ? ' to ' + l.to : ''); }).join('; ') : 'None'], ['Fixed shifts', ctx.inp.fixed && ctx.inp.fixed.length ? ctx.inp.fixed.map(function (f) { return f.name + ': ' + f.shift + (f.from || f.to ? ' (' + (f.from || '') + (f.to && f.to !== f.from ? ' to ' + f.to : '') + ')' : ''); }).join('; ') : 'None'], ['Seed', seedLabel]];
+    return [['Input', 'Value'], ['Service', i.service.svc], ['Resources per shift (n)', nLabel()], ['Period', i.period.start + ' to ' + i.period.end], ['Male', i.team.men], ['Female', i.team.women], ['Suggested team size', ctx.team.N], ['Week-offs per person', c.W], ['Holidays in period', c.holIn], ["Female window", ctx.nW ? i.women.start + ' to ' + i.women.end : 'n/a'], ['First service start', i.prev.firstStart], ['Minimum rest (h)', i.rules.minRestH], ['Max nights in a row', i.rules.maxNights], ['Max working days in a row', i.rules.maxWork], ['Max week-offs in a row', i.rules.maxOffRun], ['Longest duty (h)', i.rules.maxDutyH], ['Handover overlap (min)', i.rules.overlapMin], ['Planned leave', ctx.inp.leaves && ctx.inp.leaves.length ? ctx.inp.leaves.map(function (l) { return l.name + ' ' + l.from + (l.to !== l.from ? ' to ' + l.to : '') + (l.reason ? ' (' + l.reason + ')' : ''); }).join('; ') : 'None'], ['Planned week-offs', ctx.inp.plannedOffs && ctx.inp.plannedOffs.length ? ctx.inp.plannedOffs.map(function (l) { return l.name + ' ' + l.from + (l.to !== l.from ? ' to ' + l.to : ''); }).join('; ') : 'None'], ['Fixed shifts', ctx.inp.fixed && ctx.inp.fixed.length ? ctx.inp.fixed.map(function (f) { return f.name + ': ' + String(f.shift).replace(/\+/g, ' or ') + (f.from || f.to ? ' (' + (f.from || '') + (f.to && f.to !== f.from ? ' to ' + f.to : '') + ')' : ''); }).join('; ') : 'None'], ['Seed', seedLabel]];
   }
   function dailyTable(ctx, cand) {
     var codes = dcodes(ctx);
@@ -4280,7 +4514,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     var sm = [['Week-offs per person (fixed for the month)', sd.W], ['Target working days per person = total days − week-offs − holidays (hours target = ' + sd.dayH + ' h × this)', sd.working], ['Team average hours', sd.avg], [], sd.cols.map(function (c) { return c[0]; })];
     sd.rows.forEach(function (r) { sm.push(r); }); sm.push(sd.total); sm.push([]);
     sm.push(['How to read this table']); sd.cols.slice(1).forEach(function (c) { sm.push([c[0], c[1]]); }); sd.notes.forEach(function (n) { sm.push([n]); }); sm.push([]);
-    sm.push([]); sm.push(['Fairness score', an.score]);
+    sm.push([]); sm.push(['Fairness (percentile among the valid rosters built)', (function () { var p = pctOfCand(ctx, cand); return p === null || p === undefined ? 'Fairness index ' + an.score : RM.pctText(p); })()]);
     Object.keys(an.parts).forEach(function (k) { sm.push([an.parts[k].label, an.parts[k].idx]); });
     sm.push([]); sm.push([ctx.team.formula]); sm.push([ctx.team.tlFormula]); sm.push([ctx.team.spareFormula]);
     sm.push(['Working days per person = total days − week-offs − holidays = ' + c.D + ' − ' + c.W + ' − ' + c.holOpen + ' = ' + c.working]);
@@ -4344,6 +4578,10 @@ if (typeof module !== 'undefined') module.exports = RM;
     return b;
   }
   (function () {
+    var ur = document.getElementById('updRoster');
+    if (ur) ur.addEventListener('click', function () { openUpdateFlow(); });
+  })();
+  (function () {
     var r = document.getElementById('restart'), t = null;
     if (!r) return;
     r.addEventListener('click', function () {
@@ -4369,7 +4607,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     apply();
   })();
   function closeOverlay() {
-    var o = $('#rosterOverlay'); if (o) o.remove();
+    closeCalc(); var o = $('#rosterOverlay'); if (o) o.remove();
     try { document.body.style.overflow = ''; } catch (e) { /* ignore */ }
     document.removeEventListener('keydown', escClose);
   }
@@ -4422,6 +4660,82 @@ if (typeof module !== 'undefined') module.exports = RM;
     document.addEventListener('keydown', escClose);
   }
   var isFinalGlobal = false;
+  /* a separate full page that shows how a roster's fairness score and percentile were worked out */
+  function closeCalc() { var c = $('#calcOverlay'); if (c) c.remove(); document.removeEventListener('keydown', escCalc); }
+  function escCalc(e) { if (e.key === 'Escape') { e.stopPropagation(); closeCalc(); } }
+  function openCalc(ctx, cand, rank) {
+    closeCalc();
+    var an = cand.an, per = an.per, W = { nights: 30, special: 25, mix: 20, rest: 15, stable: 10 };
+    var nfp = per.filter(function (x, i) { return !ctx.fixedOf[i]; }); if (nfp.length < 2) nfp = per;
+    function spread(vals) { var mx = Math.max.apply(null, vals), mn = Math.min.apply(null, vals), mean = vals.reduce(function (a, b) { return a + b; }, 0) / vals.length; return { mx: mx, mn: mn, mean: mean, idx: Math.max(0, 100 * (1 - (mx - mn) / Math.max(2, mean))) }; }
+    function f1(x) { return (Math.round(x * 10) / 10).toFixed(1); }
+    var nv = nfp.map(function (x) { return x.nights; }), ns = spread(nv);
+    var sv = nfp.map(function (x) { return x.special; }), ss = spread(sv);
+    var avgStreak = per.reduce(function (a, x) { return a + x.maxStreak; }, 0) / per.length;
+    var restIdx = Math.max(0, Math.min(100, 100 - 20 * (avgStreak - 4)));
+    var changes = per.reduce(function (a, x) { return a + x.changes; }, 0), duty = Math.max(1, per.reduce(function (a, x) { return a + x.duty; }, 0));
+    var stabIdx = Math.max(0, Math.min(100, 100 - 140 * changes / duty));
+    var mixIdx = an.parts.mix.idx;
+    var rows = [
+      { k: 'nights', name: 'Night share', ask: 'Are nights shared equally?', idx: ns.idx,
+        how: 'Nights per person: ' + nfp.map(function (x) { return x.name + ' ' + x.nights; }).join(', ') + '. Highest ' + ns.mx + ', lowest ' + ns.mn + ', average ' + f1(ns.mean) + '.',
+        fx: '100 × (1 − (' + ns.mx + ' − ' + ns.mn + ') ÷ max(2, ' + f1(ns.mean) + ')) = ' + f1(ns.idx) },
+      { k: 'special', name: 'Weekends and holidays', ask: 'Are weekend and holiday duties shared equally?', idx: ss.idx,
+        how: 'Weekend and holiday duties per person: ' + nfp.map(function (x) { return x.name + ' ' + x.special; }).join(', ') + '. Highest ' + ss.mx + ', lowest ' + ss.mn + ', average ' + f1(ss.mean) + '.',
+        fx: '100 × (1 − (' + ss.mx + ' − ' + ss.mn + ') ÷ max(2, ' + f1(ss.mean) + ')) = ' + f1(ss.idx) },
+      { k: 'mix', name: 'Shift mix', ask: 'Does everyone get a similar mix of shifts?', idx: mixIdx,
+        how: an.parts.mix.text ? 'For each shift type, the same gap test is done between people (lowest to highest count): ' + an.parts.mix.text + '. The results are averaged.' : 'Only one kind of shift, so nothing to compare.',
+        fx: 'Average of the gap scores = ' + f1(mixIdx) },
+      { k: 'rest', name: 'Rest pattern', ask: 'Are week-offs well spread?', idx: restIdx,
+        how: 'The longest run of working days in a row, averaged over everyone: ' + f1(avgStreak) + ' days. Up to 4 days costs nothing, each extra day costs 20 points.',
+        fx: '100 − 20 × (' + f1(avgStreak) + ' − 4) = ' + f1(restIdx) },
+      { k: 'stable', name: 'Steady pattern', ask: 'Do people keep the same shift from day to day?', idx: stabIdx,
+        how: 'Shift changes between working days: ' + changes + ' in ' + duty + ' duty days.',
+        fx: '100 − 140 × ' + changes + ' ÷ ' + duty + ' = ' + f1(stabIdx) }
+    ];
+    var total = 0;
+    var body = rows.map(function (r) {
+      var pts = r.idx * W[r.k] / 100; total += pts;
+      return h('section', { class: 'card', style: 'margin-bottom:12px' },
+        h('h3', { style: 'margin:0 0 4px' }, r.name + '  ·  weight ' + W[r.k] + '%'),
+        h('div', { class: 'hint' }, r.ask),
+        h('p', null, r.how),
+        h('div', { class: 'fx' }, h('div', null, r.fx), h('div', null, 'Points = ' + f1(r.idx) + ' × ' + W[r.k] + '% = ' + f1(pts))));
+    });
+    var pen = an.bufOff ? 4 * an.bufOff : 0;
+    var pool = ctx._pool || [], leq = pool.filter(function (x) { return x <= an.score + 1e-9; }).length, pc = pctOfCand(ctx, cand);
+    var table = h('div', { class: 'scroll' }, h('table', { class: 'tbl' },
+      h('thead', null, h('tr', null, ['Person', 'Duty days', 'Nights', 'Weekend and holiday duties', 'Hours', 'Longest run', 'Shift changes'].map(function (t) { return h('th', null, t); }))),
+      h('tbody', null, per.map(function (x) { return h('tr', null, h('td', null, x.name), h('td', { class: 'num' }, x.duty), h('td', { class: 'num' }, x.nights), h('td', { class: 'num' }, x.special), h('td', { class: 'num' }, Math.round(x.hours * 10) / 10), h('td', { class: 'num' }, x.maxStreak), h('td', { class: 'num' }, x.changes)); }))));
+    var back = h('button', { class: 'btn small', type: 'button' }, '← Back to the roster');
+    back.addEventListener('click', closeCalc);
+    var bar = h('div', { class: 'ovbar' }, h('div', { class: 'ovt' }, h('b', null, 'Fairness calculation'), h('span', { class: 'hint' }, 'Roster option #' + rank + ' · ' + ctx.svc.label)), h('div', { class: 'row' }, back));
+    var ov = h('div', { class: 'ov', id: 'calcOverlay', role: 'dialog', 'aria-label': 'Fairness calculation', style: 'z-index:110' }, bar,
+      h('div', { class: 'ovbody' },
+        h('section', { class: 'card', style: 'margin-bottom:12px' },
+          h('h2', { style: 'margin:0 0 6px' }, 'How this roster\'s fairness was worked out'),
+          h('p', null, 'The roster gets five scores out of 100, one for each thing that makes a roster feel fair. Each score is multiplied by its weight and the five results are added. That total is then compared with the other valid rosters the tool built, and the comparison is the percentile you see.'),
+          h('div', { class: 'hint' }, 'The weights (30, 25, 20, 15, 10) are a design choice of this tool. Nights count most because they are the hardest duty.')),
+        body,
+        h('section', { class: 'card', style: 'margin-bottom:12px' },
+          h('h3', { style: 'margin:0 0 4px' }, 'Total score'),
+          h('div', { class: 'fx' },
+            h('div', null, rows.map(function (r) { return f1(r.idx * W[r.k] / 100); }).join(' + ') + (pen ? ' − ' + pen + ' (week-offs placed next to planned leave)' : '') + ' = ' + f1(total - pen)),
+            h('div', null, 'Score used for ranking = ' + an.score + ' (small differences are rounding)')),
+          pen ? h('div', { class: 'hint' }, '4 points are taken off for each week-off that falls on a day kept free around planned leave.') : null),
+        h('section', { class: 'card', style: 'margin-bottom:12px' },
+          h('h3', { style: 'margin:0 0 4px' }, 'Percentile'),
+          pc === null || pc === undefined || pool.length < 8
+            ? h('p', null, 'Too few rosters were built to compare, so the score above (' + an.score + ' out of 100) is shown as a fairness index instead.')
+            : [h('p', null, 'The tool built ' + pool.length + ' valid rosters for your inputs. This roster scores the same or higher than ' + leq + ' of them.'),
+               h('div', { class: 'fx' }, h('div', null, leq + ' ÷ ' + pool.length + ' × 100 = ' + f1(100 * leq / pool.length) + ' → ' + RM.pctText(pc))),
+               h('div', { class: 'hint' }, 'The best roster of all is always the 100th percentile, and the others follow from it. The percentile only compares rosters built for this one set of inputs.')]),
+        h('section', { class: 'card' }, h('h3', { style: 'margin:0 0 8px' }, 'The numbers behind it, per person'), table)));
+    document.body.append(ov);
+    document.addEventListener('keydown', escCalc);
+    ov.scrollTop = 0;
+  }
+
   function openRoster(ctx, cand, rank, seedLabel, isFinal) {
     closeOverlay();
     var closeBtn = h('button', { class: 'btn small', type: 'button' }, 'Close');
@@ -4429,9 +4743,11 @@ if (typeof module !== 'undefined') module.exports = RM;
     var isSel = S.final && S.final.rank === rank;
     var printBtn = h('button', { class: 'btn ghost small', type: 'button' }, 'Print');
     printBtn.addEventListener('click', function () { try { window.print(); } catch (e) { /* ignore */ } });
+    var calcBtn = h('button', { class: 'btn ghost small', type: 'button' }, 'Fairness calculation');
+    calcBtn.addEventListener('click', function () { openCalc(ctx, cand, rank); });
     var bar = h('div', { class: 'ovbar' },
-      h('div', { class: 'ovt' }, h('b', null, verOf(cand) ? 'Roster v' + verOf(cand) : (isFinal || isSel ? 'Final roster: option #' : 'Roster option #') + rank), h('span', { class: 'score' }, 'Fairness ' + cand.an.score), h('span', { class: 'hint' }, ctx.svc.label + ' · ' + RM.prettyDate(ctx.days[0].iso) + ' to ' + RM.prettyDate(ctx.days[ctx.D - 1].iso))),
-      h('div', { class: 'row' }, isFinal || isSel || verOf(cand) ? null : selectBtn(ctx, cand, rank, seedLabel), printBtn, closeBtn));
+      h('div', { class: 'ovt' }, h('b', null, verOf(cand) ? 'Roster v' + verOf(cand) : (isFinal || isSel ? 'Final roster: option #' : 'Roster option #') + rank), h('span', { class: 'score' }, fairTxt(ctx, cand)), h('span', { class: 'hint' }, ctx.svc.label + ' · ' + RM.prettyDate(ctx.days[0].iso) + ' to ' + RM.prettyDate(ctx.days[ctx.D - 1].iso))),
+      h('div', { class: 'row' }, isFinal || isSel || verOf(cand) ? null : selectBtn(ctx, cand, rank, seedLabel), calcBtn, printBtn, closeBtn));
     isFinalGlobal = isFinal || isSel;
     var body = h('div', { class: 'ovbody' },
       isFinal || isSel ? h('div', { class: 'rhead final', style: 'margin-bottom:16px' }, h('h2', null, verOf(cand) ? 'Roster v' + verOf(cand) + (cand.note ? '' : '') : 'Final roster: option #' + rank), h('p', null, 'Everything in the Excel file is shown below. Save it to your computer from here.'), h('div', { style: 'margin-top:12px' }, exportBlock(ctx, cand, rank, seedLabel))) : null,
@@ -4449,7 +4765,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     openBtn.addEventListener('click', function () { openRoster(ctx, cand, rank, seedLabel, true); });
     var box = h('div', { class: 'rhead final', id: 'finalBox' },
       h('h2', null, 'Final roster: option #' + rank),
-      h('p', null, 'Fairness ' + cand.an.score + ' · ' + ctx.D + ' days · all 12 hard rules passed. Save it to your computer below.'),
+      h('p', null, fairTxt(ctx, cand) + ' · ' + ctx.D + ' days · all 12 hard rules passed. Save it to your computer below.'),
       h('div', { style: 'margin:10px 0' }, openBtn),
       h('div', { style: 'margin-top:12px' }, exportBlock(ctx, cand, rank, seedLabel)));
     if (old) old.replaceWith(box); else if (S.headEl) S.headEl.after(box); else chat.append(box);
@@ -4493,10 +4809,10 @@ if (typeof module !== 'undefined') module.exports = RM;
       var bar = h('div', { class: 'cmp-bar', title: 'Points earned out of 100' }, keys.map(function (k) { return h('span', { style: 'width:' + pts(c, k) + '%;background:' + COL[k], title: NAME[k] + ': ' + pts(c, k) + ' of ' + maxOf(k) }); }));
       return h('tr', { class: isBest ? 'win' : '' },
         h('td', null, h('div', { class: 'rk' }, '#' + (i + 1)), isBest ? h('span', { class: 'badge' }, '★ Best') : null),
-        h('td', { class: 'tsc' }, h('b', null, c.an.score.toFixed(1)), h('small', null, ' / 100'), bar),
+        h('td', { class: 'tsc' }, h('b', null, fairShort(ctx, c)), h('small', null, pctOfCand(ctx, c) === null ? ' / 100' : ' of the rosters built'), bar),
         keys.map(function (k) { var top = pts(c, k) === best[k]; return h('td', { class: 'pc' + (top ? ' hi' : '') }, h('b', null, pts(c, k).toFixed(1)), top ? h('span', { class: 'bst' }, '★ best') : null); }),
         h('td', { class: 'wy' }, why(c, i), c.an.bufOff ? ' ' + (-4 * c.an.bufOff) + ' points for week-offs near planned leave.' : ''),
-        h('td', null, h('div', { class: 'cmp-btns' }, h('button', { class: 'btn ghost small', type: 'button', onclick: function () { openRoster(ctx, c, i + 1, seedLabel, false); } }, 'Open'), selectBtn(ctx, c, i + 1, seedLabel))));
+        h('td', null, h('div', { class: 'cmp-btns' }, h('button', { class: 'btn ghost small', type: 'button', onclick: function () { openRoster(ctx, c, i + 1, seedLabel, false); } }, 'Open'), h('button', { class: 'btn ghost small', type: 'button', onclick: function () { openCalc(ctx, c, i + 1); } }, 'Fairness calculation'), selectBtn(ctx, c, i + 1, seedLabel))));
     });
     return h('section', { class: 'cmp card' },
       h('h3', { class: 'cmp-h' }, 'Which roster is best?'),
@@ -4514,7 +4830,7 @@ if (typeof module !== 'undefined') module.exports = RM;
       h('div', { class: 'rank' }, '#' + rank),
       h('div', null,
         h('h3', null, why.headline),
-        h('div', { class: 'meta' }, h('span', { class: 'score' }, 'Fairness ' + an.score), h('span', { class: 'pill n' }, cand.hard.length + '/' + cand.hard.length + ' hard rules')),
+        h('div', { class: 'meta' }, h('span', { class: 'score' }, fairTxt(ctx, cand)), h('span', { class: 'pill n' }, cand.hard.length + '/' + cand.hard.length + ' hard rules')),
         h('ul', { class: 'why' }, why.lines.slice(0, rank === 1 ? 5 : 4).map(function (l) { return h('li', { class: l.t === 'warn' ? 'warn' : '' }, l.s); })),
         why.vs ? h('div', { class: 'vs' }, why.vs) : null,
         ctx.leaveN ? h('div', { class: 'vs' }, leaveLine(ctx, cand)) : null,
@@ -4522,7 +4838,7 @@ if (typeof module !== 'undefined') module.exports = RM;
         h('details', { class: 'csum' }, h('summary', null, 'Summary of this roster, with who worked each holiday'),
           h('h4', null, 'Summary per person'), summaryTable(ctx, cand),
           h('h4', null, 'Who worked on holidays'), holidayTable(ctx, cand)))),
-      h('div', { class: 'rfoot' }, toggle, selectBtn(ctx, cand, rank, seedLabel)));
+      h('div', { class: 'rfoot' }, toggle, h('button', { class: 'btn ghost small', type: 'button', onclick: function () { openCalc(ctx, cand, rank); } }, 'Fairness calculation'), selectBtn(ctx, cand, rank, seedLabel)));
     return el;
   }
   function moreRow(ctx, cand, rank, best, seedLabel) {
@@ -4530,7 +4846,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     var btn = h('button', { class: 'btn ghost small', type: 'button' }, 'View');
     var row = h('div', { class: 'mrow' });
     btn.addEventListener('click', function () { openRoster(ctx, cand, rank, seedLabel, false); });
-    row.append(h('div', { class: 'l' }, h('span', { class: 'rk' }, '#' + rank), h('span', { class: 'score', style: 'text-align:center' }, an.score),
+    row.append(h('div', { class: 'l' }, h('span', { class: 'rk' }, '#' + rank), h('span', { class: 'score', style: 'text-align:center' }, fairShort(ctx, cand)),
       h('div', { class: 'tx' }, 'Nights ' + an.parts.nights.min + '–' + an.parts.nights.max + ' · weekends and holidays ' + an.parts.special.min + '–' + an.parts.special.max + ' · ' + an.parts.stable.changes + ' shift changes'), h('span', { class: 'row' }, btn, selectBtn(ctx, cand, rank, seedLabel))));
     return row;
   }
@@ -4603,7 +4919,7 @@ if (typeof module !== 'undefined') module.exports = RM;
     var d = h('details', { class: 'rhead' }, h('summary', { style: 'cursor:pointer;font-weight:600' }, 'Compare other team sizes and male and female splits'), body);
     var done = false;
     var H4 = 'margin:0 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)';
-    function pillFor(r) { return h('span', { class: 'pill ' + (r.status === 'ok' ? 'ok' : r.status === 'blocked' ? 'n' : 'bad') }, r.status === 'ok' ? 'Fairness ' + r.score : r.status === 'blocked' ? 'Not allowed' : 'Not possible'); }
+    function pillFor(r) { return h('span', { class: 'pill ' + (r.status === 'ok' ? 'ok' : r.status === 'blocked' ? 'n' : 'bad') }, r.status === 'ok' ? 'Roster possible' : r.status === 'blocked' ? 'Not allowed' : 'Not possible'); }
     d.addEventListener('toggle', function () {
       if (!d.open || done) return; done = true;
       fill(body, h('div', { class: 'hint' }, 'Checking team sizes and splits…'));
@@ -4677,7 +4993,7 @@ if (typeof module !== 'undefined') module.exports = RM;
 
   /* ---------- start ---------- */
   renderPanel();
-  S.lead = 'Pick the service hours and how many people are needed on the Morning, Evening and Night shifts. It takes about two minutes, and you can go Back or Edit any answer later.';
+  S.lead = 'Pick the service hours, split the day into shifts, and say how many people each shift needs. It takes about two minutes, and you can go Back or Edit any answer later.';
   ask('service');
   window.__RM_STATE = S;
   (function () {
